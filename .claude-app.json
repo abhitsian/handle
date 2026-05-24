@@ -1,0 +1,8 @@
+{
+  "name": "Tab Tasks",
+  "type": "python",
+  "entry": "app.py",
+  "port": 4910,
+  "open": "http://localhost:4910",
+  "description": "Reads your open Chrome tabs on demand, groups them into the tasks you're working on, and flags ones that have gone stale so you remember what's unfinished. Pure stdlib — no dependencies."
+}

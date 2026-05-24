@@ -1,0 +1,6 @@
+state.json
+actions.json
+deductions.json
+__pycache__/
+*.pyc
+.DS_Store
