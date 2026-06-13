@@ -309,21 +309,24 @@ MAIN_CONTENT_JS = (
 )
 
 
-def read_tab_content(url: str, limit: int = 8000) -> str:
-    """Read the rendered text of an open tab via Chrome JS execution.
+def run_tab_js(url: str, js: str, limit: int = 8000) -> str:
+    """Execute arbitrary JS in the open tab matching `url`; return its string.
 
-    Extracts the page's main content (article/main) rather than the whole
-    body, so navigation and footer chrome are dropped. Returns "" if the tab
-    isn't found or Chrome's "Allow JavaScript from Apple Events" setting is
-    off. For public pages, callers can fall back to fetching the URL instead.
+    The generic primitive behind every extractor. Chrome's `execute javascript`
+    evaluates synchronously and returns the expression's value — so the JS must
+    return a value directly (a Promise would come back unresolved; use a
+    synchronous XMLHttpRequest for in-tab fetches). Returns "" if the tab isn't
+    found or Chrome's "Allow JavaScript from Apple Events" is off. Raw text is
+    returned (newlines preserved) so callers can format as they need.
     """
-    safe = url.replace("\\", "\\\\").replace('"', '\\"')
+    safe_url = url.replace("\\", "\\\\").replace('"', '\\"')
+    safe_js = js.replace("\\", "\\\\").replace('"', '\\"')
     lines = [
         'tell application "Google Chrome"',
         '  repeat with w in windows',
         '    repeat with t in tabs of w',
-        f'      if (URL of t) is "{safe}" then',
-        f'        return execute t javascript "{MAIN_CONTENT_JS}"',
+        f'      if (URL of t) is "{safe_url}" then',
+        f'        return execute t javascript "{safe_js}"',
         '      end if',
         '    end repeat',
         '  end repeat',
@@ -340,7 +343,19 @@ def read_tab_content(url: str, limit: int = 8000) -> str:
         return ""
     if proc.returncode != 0:
         return ""
-    return " ".join(proc.stdout.split())[:limit]
+    return proc.stdout.strip()[:limit]
+
+
+def read_tab_content(url: str, limit: int = 8000) -> str:
+    """Read the rendered main-content text of an open HTML tab.
+
+    Extracts the page's main content (article/main) rather than the whole
+    body, so navigation and footer chrome are dropped, and flattens whitespace.
+    Returns "" if the tab isn't found, Chrome's "Allow JavaScript from Apple
+    Events" is off, or the page has no DOM text (a canvas app, a PDF viewer).
+    """
+    raw = run_tab_js(url, MAIN_CONTENT_JS, limit * 3)
+    return " ".join(raw.split())[:limit]
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -229,25 +230,112 @@ def cmd_find(args) -> None:
     print("\n".join(_line(t) for t in hits))
 
 
-def _read_one(tab: dict, args) -> dict:
-    """Return a read payload for one tab.
+# --------------------------------------------------------------------------- #
+# content-type-aware reading
+# --------------------------------------------------------------------------- #
+# Most tabs are HTML and read fine via innerText. The rich formats don't put
+# their content in the DOM — Docs/Sheets/Slides render to a canvas, Figma is
+# WebGL, PDFs are a plugin, Office viewers are iframed — so each needs its own
+# extractor. The Google formats are pulled by a SYNCHRONOUS in-tab XHR against
+# their export endpoint: same-origin, so it carries the user's login, and
+# synchronous so `execute javascript` gets the text (not an unresolved Promise).
 
-    Fast path (default): the snippet captured at collect time — instant, no
-    Chrome round-trip. Falls back to a live JS read if the cache is empty, or
-    always reads live when --live is set (full page, freshly rendered).
-    """
+def detect_kind(url: str) -> str:
+    u = url.lower()
+    if "figma.com" in u:
+        return "figma"
+    if "docs.google.com/document" in u:
+        return "gdoc"
+    if "docs.google.com/spreadsheets" in u:
+        return "gsheet"
+    if "docs.google.com/presentation" in u:
+        return "gslides"
+    if u.split("?")[0].split("#")[0].endswith(".pdf"):
+        return "pdf"
+    if "sharepoint.com" in u or "officeapps.live.com" in u or "office.com" in u:
+        return "office"
+    return "html"
+
+
+def _sync_xhr_js(export_url: str) -> str:
+    """JS that synchronously GETs `export_url` (same-origin, authenticated) and
+    returns the body on 200, else ''. Sync XHR is required — execute javascript
+    can't await a fetch()."""
+    safe = export_url.replace("'", "\\'")
+    return ("(function(){try{var x=new XMLHttpRequest();"
+            f"x.open('GET','{safe}',false);x.send();"
+            "return x.status===200?x.responseText:('__HANDLE_HTTP__'+x.status);}"
+            "catch(e){return '';}})()")
+
+
+def _export_url(kind: str, url: str) -> str | None:
+    if kind == "gdoc":
+        m = re.search(r"/document/d/([^/]+)", url)
+        return f"https://docs.google.com/document/d/{m.group(1)}/export?format=txt" if m else None
+    if kind == "gslides":
+        m = re.search(r"/presentation/d/([^/]+)", url)
+        return f"https://docs.google.com/presentation/d/{m.group(1)}/export/txt" if m else None
+    if kind == "gsheet":
+        m = re.search(r"/spreadsheets/d/([^/]+)", url)
+        if not m:
+            return None
+        gid = re.search(r"[?#&]gid=(\d+)", url)
+        base = f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv"
+        return base + (f"&gid={gid.group(1)}" if gid else "")
+    return None
+
+
+def _figma_ref(url: str) -> dict:
+    m = re.search(r"figma\.com/(?:file|design|proto|board|slides)/([A-Za-z0-9]+)", url)
+    node = re.search(r"[?&]node-id=([^&]+)", url)
+    return {"file_key": m.group(1) if m else None,
+            "node_id": node.group(1).replace("-", ":") if node else None}
+
+
+def _read_one(tab: dict, args) -> dict:
+    """Read one tab, routing by content type. HTML uses the cached snippet
+    (instant) or a live readability read with --live; Google formats are pulled
+    fresh from their export endpoint; Figma/PDF/Office return a typed pointer
+    instead of scraped text."""
+    url, kind = tab["url"], detect_kind(tab["url"])
+    base = {"id": tab["id"], "title": tab["title"], "url": url, "kind": kind}
+
+    if kind == "figma":
+        ref = _figma_ref(url)
+        return {**base, "source": "figma", "chars": 0, "content": "", **ref,
+                "note": "Figma is a WebGL canvas — no readable DOM text. Read it "
+                        "via the Figma MCP get_design_context with this file_key/node_id."}
+
+    if kind in ("gdoc", "gsheet", "gslides"):
+        exp = _export_url(kind, url)
+        text = collect.run_tab_js(url, _sync_xhr_js(exp), args.chars) if exp else ""
+        note = ""
+        if text.startswith("__HANDLE_HTTP__"):
+            code = text[len("__HANDLE_HTTP__"):][:3]
+            note = (f"Export blocked (HTTP {code}) — the file owner may have disabled "
+                    "download/export, or you're not signed in to this Google account in Chrome.")
+            text = ""
+        elif not exp:
+            note = "Could not parse the file id from the URL."
+        elif not text:
+            note = "Export returned nothing — not signed in, or no access to the file."
+        return {**base, "source": "export", "chars": len(text), "content": text, "note": note}
+
+    if kind in ("pdf", "office"):
+        note = ("PDF — not readable as tab text. For a public PDF, WebFetch the URL."
+                if kind == "pdf" else
+                "Office web viewer — content is iframed, not in the DOM. Not supported "
+                "(needs the Microsoft Graph API).")
+        return {**base, "source": kind, "chars": 0, "content": "", "note": note}
+
+    # html
     source, content = "cache", tab.get("snippet", "")
     if args.live or not content:
-        live = collect.read_tab_content(tab["url"], limit=args.chars)
+        live = collect.read_tab_content(url, limit=args.chars)
         if live:
             source, content = "live", live
-        elif content:
-            source = "cache"  # keep the cached snippet we already had
     content = content[:args.chars]
-    return {
-        "id": tab["id"], "title": tab["title"], "url": tab["url"],
-        "source": source, "chars": len(content), "content": content,
-    }
+    return {**base, "source": source, "chars": len(content), "content": content}
 
 
 def cmd_read(args) -> None:
@@ -262,15 +350,23 @@ def cmd_read(args) -> None:
 
     blocks = []
     for p in payloads:
-        if not p["content"]:
-            blocks.append(
-                f"# {p['id']}  {p['title']}\n{p['url']}\n\n"
-                "(No content. Enable Chrome → View → Developer → "
-                "'Allow JavaScript from Apple Events', or the tab may be a "
-                "PDF/viewer. For a public page, fall back to WebFetch.)")
-        else:
-            tag = "" if p["source"] == "live" else "  ·  cached (use --live for full page)"
-            blocks.append(f"# {p['title']}{tag}\n{p['url']}\n\n{p['content']}")
+        head = f"# {p['title']}"
+        if p["kind"] != "html":
+            head += f"  ·  {p['kind']}"
+        elif p["source"] == "cache":
+            head += "  ·  cached (use --live for full page)"
+        body = p["content"]
+        if not body:
+            if p["kind"] == "figma":
+                body = (f"[Figma file {p.get('file_key')}"
+                        + (f", node {p['node_id']}" if p.get("node_id") else "")
+                        + f"]\n→ {p['note']}")
+            elif p.get("note"):
+                body = f"({p['note']})"
+            else:
+                body = ("(No content. Enable Chrome → View → Developer → "
+                        "'Allow JavaScript from Apple Events'.)")
+        blocks.append(f"{head}\n{p['url']}\n\n{body}")
     print("\n\n———\n\n".join(blocks))
 
 

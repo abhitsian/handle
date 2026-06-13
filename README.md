@@ -27,6 +27,20 @@ looking at."
 cached snapshot (instant); `--live` reads the full page fresh and extracts the
 main article, dropping nav/footer chrome.
 
+`read` is **format-aware** — it routes by what the tab is, and the payload
+carries a `kind`:
+
+| Tab | How it's read |
+|-----|---------------|
+| **HTML** page | main-content text (readability) |
+| **Google Doc / Sheet / Slides** | the authenticated **export** (txt / CSV / txt), pulled fresh past your login via an in-tab request |
+| **Figma** | returns the `file_key` + `node_id` — read the design through the Figma MCP (`get_design_context`), since a WebGL canvas has no DOM text |
+| **PDF** | not readable as tab text; WebFetch the URL if it's public |
+| **Office / SharePoint** | not supported (iframed viewer — needs the Graph API) |
+
+When content comes back empty, the payload's `note` says exactly why (export
+blocked, not signed in, JavaScript-from-Apple-Events off, …).
+
 ## What the board does
 
 - **Refresh** — reads every open Chrome tab via AppleScript, plus when you last
