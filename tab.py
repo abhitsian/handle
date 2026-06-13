@@ -450,6 +450,78 @@ def cmd_grep(args) -> None:
         print(f"{h['id']:>4}  {h['title'][:70]}\n        {h['excerpt']}\n        {h['url']}")
 
 
+_STOPWORDS = set((
+    "the a an and or of to in on for with is are was were be been being do does did "
+    "how what why when where which who whom this that these those my your our their it "
+    "its as at by from about into over under after before than then so if not no can "
+    "could would should may might will just have has had i you we they me us them "
+    "tell show give find read about across all any some more most vs versus between"
+).split())
+
+
+def _terms(question: str) -> list[str]:
+    """Content words from the question — lowercased, de-stopworded, length>2."""
+    words = re.findall(r"[a-z0-9][a-z0-9'-]*", question.lower())
+    seen, out = set(), []
+    for w in words:
+        if len(w) > 2 and w not in _STOPWORDS and w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
+
+
+class _ReadArgs:
+    """Minimal args for _read_one — read each source as format-aware markdown."""
+    def __init__(self, chars):
+        self.live, self.md, self.shot, self.full, self.json, self.chars = False, True, False, False, False, chars
+
+
+def cmd_ask(args) -> None:
+    """Retrieve the open tabs relevant to a question and assemble a cited bundle
+    the agent answers from. Handle does no AI — it ranks by the question's terms,
+    reads the top matches as clean content, and hands them over with handles to
+    cite. Cross-tab, low-token: the thing single-tab browser tools can't do."""
+    question = " ".join(args.question).strip()
+    terms = _terms(question)
+    tabs = load_tabs()
+
+    scored = []
+    for t in tabs:
+        title, snip = t["title"].lower(), (t["snippet"] or "").lower()
+        score = sum(title.count(w) * 3 + snip.count(w) for w in terms)
+        if score:
+            scored.append((score, t))
+    scored.sort(key=lambda x: -x[0])
+    top = scored[:args.tabs]
+
+    if not top:
+        msg = (f"No open tab mentions {terms or [question]}. Searched titles + cached "
+               "page content — run `tab refresh` to re-scan, or rephrase the question.")
+        print(json.dumps({"question": question, "terms": terms, "sources": []}) if args.json else msg)
+        return
+
+    sources = []
+    for score, t in top:
+        p = _read_one(t, _ReadArgs(args.chars))
+        content = p.get("content") or t["snippet"] or t["summary"] or ""
+        sources.append({"id": t["id"], "title": t["title"], "url": t["url"],
+                        "score": score, "kind": p.get("kind", "html"), "content": content[:args.chars]})
+
+    if args.json:
+        print(json.dumps({"question": question, "terms": terms, "sources": sources}, indent=2, ensure_ascii=False))
+        return
+
+    print(f"ASK: {question}")
+    print(f"Pulled {len(sources)} tab(s) by relevance (term hits: {', '.join(terms) or '—'}):")
+    for s in sources:
+        print(f"  {s['id']:>4}  [{s['score']:>2}]  {s['title'][:64]}")
+    print("\n" + "=" * 60)
+    for s in sources:
+        print(f"\n### {s['id']} · {s['title']}\n{s['url']}\n\n{s['content']}\n")
+    print("=" * 60)
+    print("→ Answer the question from these sources; cite tabs by handle (e.g. t3).")
+
+
 def cmd_show(args) -> None:
     tabs = load_tabs()
     picked = []
@@ -563,6 +635,13 @@ def build_parser() -> argparse.ArgumentParser:
     sgr.add_argument("query")
     sgr.add_argument("--json", action="store_true")
     sgr.set_defaults(func=cmd_grep)
+
+    sa2 = sub.add_parser("ask", help="assemble the open tabs relevant to a question (cited bundle to answer from)")
+    sa2.add_argument("question", nargs="+", help="the question, in plain words")
+    sa2.add_argument("--tabs", type=int, default=5, help="max tabs to pull (default 5)")
+    sa2.add_argument("--chars", type=int, default=4000, help="max characters per source")
+    sa2.add_argument("--json", action="store_true")
+    sa2.set_defaults(func=cmd_ask)
 
     sr = sub.add_parser("read", help="page text of one or more tabs (cached; --live for full)")
     sr.add_argument("refs", nargs="+", help="one or more tab references")

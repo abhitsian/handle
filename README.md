@@ -21,6 +21,7 @@ looking at."
     tab list                 # every open tab: handle · group · staleness
     tab find figma           # resolve a fuzzy query to handle(s) by title/url
     tab grep "fable"         # search the on-page content of every tab
+    tab ask "what do my tabs say about X"   # rank → read relevant tabs → answer, cited
     tab read t49             # page text — cached & instant
     tab read t29 t30 t4      # several tabs at once
     tab read t49 --live      # fresh full page, main content (nav stripped)

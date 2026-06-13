@@ -20,6 +20,7 @@ vision.
 | `list_tabs` | open tabs with stable handles (t1, t2…), groups, stale flags |
 | `find_tab` | resolve a fuzzy name → handle (title/url/group/note) |
 | `grep_tabs` | search the on-page content of every tab |
+| `ask_tabs` | answer a question across open tabs — ranks, reads the relevant ones, returns a cited bundle |
 | `read_tab` | read tab(s): HTML text / Markdown (`md`) / Google export / Figma·PDF·Office screenshot |
 | `screenshot_tab` | capture a tab as image(s) to read with vision (`full` for whole page) |
 | `active_tab` | the frontmost tab — "what I'm looking at" |

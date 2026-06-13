@@ -74,6 +74,14 @@ function toolGrepTabs(a) {
   return [{ type: 'text', text: runTab(['grep', String(a.query)]) }];
 }
 
+function toolAskTabs(a) {
+  if (!a.question) throw new Error('question is required');
+  const args = ['ask', String(a.question)];
+  if (a.tabs != null) args.push('--tabs', String(a.tabs));
+  if (a.chars != null) args.push('--chars', String(a.chars));
+  return [{ type: 'text', text: runTab(args) }];
+}
+
 function readPayloadsToContent(payloads) {
   const content = [];
   let images = 0;
@@ -167,6 +175,20 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Text to search for across tab contents.' } }, required: ['query'] },
   },
   {
+    name: 'ask_tabs',
+    description:
+      'Answer a question from the user\'s OPEN TABS. Ranks every open tab by the question\'s terms, reads the ' +
+      'most relevant ones as clean content, and returns a cited bundle (each source tagged with its handle). ' +
+      'Use for "answer X from my open tabs", "what do my tabs say about Y", "across what I have open, …". Then ' +
+      'write the answer and CITE the tabs by handle (t3, t7); discount weak/irrelevant matches. Cross-tab and ' +
+      'low-token — the thing single-tab browser tools can\'t do.',
+    inputSchema: { type: 'object', properties: {
+      question: { type: 'string', description: 'The question, in plain words.' },
+      tabs: { type: 'number', description: 'Max tabs to pull (default 5).' },
+      chars: { type: 'number', description: 'Max characters per source (default 4000).' },
+    }, required: ['question'] },
+  },
+  {
     name: 'read_tab',
     description:
       'Read the live, logged-in content of the user\'s open tab(s) — past login walls and JS that defeat a plain ' +
@@ -232,7 +254,7 @@ const TOOLS = [
 ];
 
 const HANDLERS = {
-  list_tabs: toolListTabs, find_tab: toolFindTab, grep_tabs: toolGrepTabs,
+  list_tabs: toolListTabs, find_tab: toolFindTab, grep_tabs: toolGrepTabs, ask_tabs: toolAskTabs,
   read_tab: toolReadTab, screenshot_tab: toolScreenshotTab, active_tab: toolActiveTab,
   open_tab: toolOpenTab, close_tab: toolCloseTab, note_tab: toolNoteTab,
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,
