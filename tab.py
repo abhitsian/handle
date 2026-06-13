@@ -299,6 +299,9 @@ def _read_one(tab: dict, args) -> dict:
     instead of scraped text."""
     url, kind = tab["url"], detect_kind(tab["url"])
     base = {"id": tab["id"], "title": tab["title"], "url": url, "kind": kind}
+    md_mode = getattr(args, "md", False)
+    # default budget: 8000 chars, but more for markdown/export (whole docs)
+    chars = args.chars if args.chars is not None else (20000 if md_mode else 8000)
 
     if kind == "figma":
         ref = _figma_ref(url)
@@ -308,7 +311,7 @@ def _read_one(tab: dict, args) -> dict:
 
     if kind in ("gdoc", "gsheet", "gslides"):
         exp = _export_url(kind, url)
-        text = collect.run_tab_js(url, _sync_xhr_js(exp), args.chars) if exp else ""
+        text = collect.run_tab_js(url, _sync_xhr_js(exp), chars) if exp else ""
         note = ""
         if text.startswith("__HANDLE_HTTP__"):
             code = text[len("__HANDLE_HTTP__"):][:3]
@@ -329,12 +332,16 @@ def _read_one(tab: dict, args) -> dict:
         return {**base, "source": kind, "chars": 0, "content": "", "note": note}
 
     # html
+    if md_mode:
+        md = collect.read_tab_markdown(url, limit=chars)
+        return {**base, "source": "markdown", "chars": len(md), "content": md,
+                "note": "" if md else "No DOM content (Allow JavaScript from Apple Events off?)."}
     source, content = "cache", tab.get("snippet", "")
     if args.live or not content:
-        live = collect.read_tab_content(url, limit=args.chars)
+        live = collect.read_tab_content(url, limit=chars)
         if live:
             source, content = "live", live
-    content = content[:args.chars]
+    content = content[:chars]
     return {**base, "source": source, "chars": len(content), "content": content}
 
 
@@ -527,7 +534,10 @@ def build_parser() -> argparse.ArgumentParser:
     sr.add_argument("refs", nargs="+", help="one or more tab references")
     sr.add_argument("--live", action="store_true",
                     help="read the live rendered page now instead of the cached snippet")
-    sr.add_argument("--chars", type=int, default=8000, help="max characters per tab")
+    sr.add_argument("--md", action="store_true",
+                    help="convert the page to Markdown (headings/lists/links/tables) — best for text-heavy HTML")
+    sr.add_argument("--chars", type=int, default=None,
+                    help="max characters per tab (default 8000, or 20000 with --md)")
     sr.add_argument("--json", action="store_true")
     sr.set_defaults(func=cmd_read)
 

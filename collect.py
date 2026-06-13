@@ -7,6 +7,7 @@ no API keys. Run directly to refresh state.json, or import `collect()`.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -320,13 +321,17 @@ def run_tab_js(url: str, js: str, limit: int = 8000) -> str:
     returned (newlines preserved) so callers can format as they need.
     """
     safe_url = url.replace("\\", "\\\\").replace('"', '\\"')
-    safe_js = js.replace("\\", "\\\\").replace('"', '\\"')
+    # Run the JS via eval(atob('<base64>')) so the source crosses the AppleScript
+    # string boundary untouched — no quote/backslash/newline escaping to get
+    # wrong. The wrapper itself is pure [A-Za-z0-9+/=()'.], safe to embed.
+    b64 = base64.b64encode(js.encode("utf-8")).decode("ascii")
+    wrapper = "eval(atob('" + b64 + "'))"
     lines = [
         'tell application "Google Chrome"',
         '  repeat with w in windows',
         '    repeat with t in tabs of w',
         f'      if (URL of t) is "{safe_url}" then',
-        f'        return execute t javascript "{safe_js}"',
+        f'        return execute t javascript "{wrapper}"',
         '      end if',
         '    end repeat',
         '  end repeat',
@@ -344,6 +349,61 @@ def run_tab_js(url: str, js: str, limit: int = 8000) -> str:
     if proc.returncode != 0:
         return ""
     return proc.stdout.strip()[:limit]
+
+
+# DOM → Markdown for the main content element. Same paragraph-scoring root
+# selection as MAIN_CONTENT_JS, then a compact recursive serializer that keeps
+# the structure flat text throws away: headings, lists, links, tables, code,
+# blockquotes, images. Runs via base64 (run_tab_js), so regex/newlines are safe.
+MARKDOWN_JS = r"""(function(){
+  var ps=document.querySelectorAll('p'),sc=new Map();
+  for(var i=0;i<ps.length;i++){var p=ps[i];var t=(p.textContent||'').trim();
+    if(t.length<25)continue;var pa=p.parentElement;if(!pa)continue;
+    sc.set(pa,(sc.get(pa)||0)+Math.min(t.length,1000)/100+1);}
+  var best=null,bs=0;sc.forEach(function(v,k){if(v>bs){bs=v;best=k;}});
+  var root=best||document.querySelector('article')||document.querySelector('main')||document.body;
+  if(!root)return '';
+  var SKIP={SCRIPT:1,STYLE:1,NAV:1,HEADER:1,FOOTER:1,ASIDE:1,NOSCRIPT:1,FORM:1,BUTTON:1,SVG:1,IFRAME:1};
+  function inline(node){var out='';node.childNodes.forEach(function(c){
+    if(c.nodeType===3){out+=c.textContent.replace(/\s+/g,' ');return;}
+    if(c.nodeType!==1)return;var tag=c.tagName.toLowerCase();
+    if(SKIP[c.tagName])return;
+    if(tag==='a'){var h=c.getAttribute('href')||'';var tx=inline(c).trim();out+=h?('['+tx+']('+h+')'):tx;}
+    else if(tag==='strong'||tag==='b'){out+='**'+inline(c).trim()+'**';}
+    else if(tag==='em'||tag==='i'){out+='*'+inline(c).trim()+'*';}
+    else if(tag==='code'){out+='`'+(c.textContent||'').replace(/\s+/g,' ').trim()+'`';}
+    else if(tag==='br'){out+='\n';}
+    else{out+=inline(c);}});return out;}
+  function tableMd(tb){var rows=tb.querySelectorAll('tr'),o=[];
+    rows.forEach(function(r,ri){var cs=r.querySelectorAll('th,td'),line=[];
+      cs.forEach(function(cell){line.push(inline(cell).trim().replace(/\|/g,'\\|').replace(/\n/g,' '));});
+      o.push('| '+line.join(' | ')+' |');
+      if(ri===0)o.push('| '+line.map(function(){return '---';}).join(' | ')+' |');});
+    return o.join('\n');}
+  function block(node,depth){var md='';node.childNodes.forEach(function(c){
+    if(c.nodeType===3){var t=c.textContent.replace(/\s+/g,' ');if(t.trim())md+=t;return;}
+    if(c.nodeType!==1)return;var tag=c.tagName;if(SKIP[tag])return;var lt=tag.toLowerCase();
+    if(/^H[1-6]$/.test(tag)){var tx=inline(c).trim();if(tx)md+='\n\n'+Array(+tag[1]+1).join('#')+' '+tx+'\n';}
+    else if(lt==='p'){var t=inline(c).trim();if(t)md+='\n\n'+t+'\n';}
+    else if(lt==='ul'||lt==='ol'){md+='\n';var idx=1;
+      c.childNodes.forEach(function(li){if(li.nodeType===1&&li.tagName.toLowerCase()==='li'){
+        var mark=lt==='ol'?(idx++)+'. ':'- ';var tx=inline(li).trim();
+        if(tx)md+='\n'+Array(depth+1).join('  ')+mark+tx;}});md+='\n';}
+    else if(lt==='blockquote'){var tx=inline(c).trim();if(tx)md+='\n\n> '+tx.replace(/\n/g,'\n> ')+'\n';}
+    else if(lt==='pre'){md+='\n\n```\n'+(c.textContent||'').replace(/\n+$/,'')+'\n```\n';}
+    else if(lt==='hr'){md+='\n\n---\n';}
+    else if(lt==='table'){md+='\n\n'+tableMd(c)+'\n';}
+    else if(lt==='img'){var src=c.getAttribute('src')||'';var alt=c.getAttribute('alt')||'';
+      if(src&&src.indexOf('data:')!==0)md+='\n\n!['+alt+']('+src+')\n';}
+    else{md+=block(c,depth+1);}});return md;}
+  return block(root,0).replace(/\n{3,}/g,'\n\n').replace(/[ \t]+\n/g,'\n').trim();
+})()"""
+
+
+def read_tab_markdown(url: str, limit: int = 16000) -> str:
+    """Convert an open HTML tab's main content to Markdown — headings, lists,
+    links, tables preserved. Best for text-heavy pages (articles, docs, wikis)."""
+    return run_tab_js(url, MARKDOWN_JS, limit)
 
 
 def read_tab_content(url: str, limit: int = 8000) -> str:

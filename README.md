@@ -19,6 +19,7 @@ looking at."
     tab read t49             # page text — cached & instant
     tab read t29 t30 t4      # several tabs at once
     tab read t49 --live      # fresh full page, main content (nav stripped)
+    tab read t49 --md        # convert the page to Markdown (headings/lists/links/tables)
     tab active               # the frontmost tab ("what I'm looking at")
     tab open / close / note / group / pin / refresh
 
