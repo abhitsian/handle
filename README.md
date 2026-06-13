@@ -20,6 +20,7 @@ looking at."
     tab read t29 t30 t4      # several tabs at once
     tab read t49 --live      # fresh full page, main content (nav stripped)
     tab read t49 --md        # convert the page to Markdown (headings/lists/links/tables)
+    tab shot t49 [--full]    # screenshot the tab → PNG path(s) the agent reads with vision
     tab active               # the frontmost tab ("what I'm looking at")
     tab open / close / note / group / pin / refresh
 
@@ -35,9 +36,13 @@ carries a `kind`:
 |-----|---------------|
 | **HTML** page | main-content text (readability) |
 | **Google Doc / Sheet / Slides** | the authenticated **export** (txt / CSV / txt), pulled fresh past your login via an in-tab request |
-| **Figma** | returns the `file_key` + `node_id` — read the design through the Figma MCP (`get_design_context`), since a WebGL canvas has no DOM text |
-| **PDF** | not readable as tab text; WebFetch the URL if it's public |
-| **Office / SharePoint** | not supported (iframed viewer — needs the Graph API) |
+| **Figma** | **screenshot** → read with vision (also returns `file_key`/`node_id` for the Figma MCP if you want structured design data) |
+| **PDF** | **screenshot** → read with vision; works for authenticated/internal PDFs (`--full` for multi-page) |
+| **Office / SharePoint** | **screenshot** → read with vision |
+
+Anything with no DOM text (Figma/PDF/Office) — or any tab with `read --shot` —
+is captured as image(s) the agent reads with vision (`tab shot <ref>`, `--full`
+to scroll the whole page). Needs macOS Screen Recording permission (one-time).
 
 When content comes back empty, the payload's `note` says exactly why (export
 blocked, not signed in, JavaScript-from-Apple-Events off, …).

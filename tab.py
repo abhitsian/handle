@@ -292,57 +292,79 @@ def _figma_ref(url: str) -> dict:
             "node_id": node.group(1).replace("-", ":") if node else None}
 
 
+def _screenshot_payload(tab: dict, kind: str, args) -> dict:
+    """The catch-all: capture the tab as image(s) for the agent to read with
+    vision. The only path for Figma/PDF/Office (no DOM text), and forced by
+    --shot for anything visual."""
+    base = {"id": tab["id"], "title": tab["title"], "url": tab["url"], "kind": kind}
+    shots, err = collect.screenshot_tab(tab["url"], full=getattr(args, "full", False))
+    p = {**base, "source": "screenshot", "chars": 0, "content": "", "shots": shots, "note": ""}
+    if kind == "figma":
+        p.update(_figma_ref(tab["url"]))
+    if not shots:
+        hint = {"figma": " Or read it via the Figma MCP get_design_context (file_key above).",
+                "pdf": " Or WebFetch the URL if the PDF is public.",
+                "office": ""}.get(kind, "")
+        p["note"] = err + hint
+    return p
+
+
 def _read_one(tab: dict, args) -> dict:
     """Read one tab, routing by content type. HTML uses the cached snippet
-    (instant) or a live readability read with --live; Google formats are pulled
-    fresh from their export endpoint; Figma/PDF/Office return a typed pointer
-    instead of scraped text."""
+    (instant) or a live readability/markdown read; Google formats are pulled
+    fresh from their export endpoint; Figma/PDF/Office (and anything with
+    --shot) fall through to a screenshot the agent reads with vision."""
     url, kind = tab["url"], detect_kind(tab["url"])
     base = {"id": tab["id"], "title": tab["title"], "url": url, "kind": kind}
     md_mode = getattr(args, "md", False)
     # default budget: 8000 chars, but more for markdown/export (whole docs)
     chars = args.chars if args.chars is not None else (20000 if md_mode else 8000)
 
-    if kind == "figma":
-        ref = _figma_ref(url)
-        return {**base, "source": "figma", "chars": 0, "content": "", **ref,
-                "note": "Figma is a WebGL canvas — no readable DOM text. Read it "
-                        "via the Figma MCP get_design_context with this file_key/node_id."}
+    # text-first kinds keep their text path — unless the user forces --shot
+    if not getattr(args, "shot", False):
+        if kind in ("gdoc", "gsheet", "gslides"):
+            exp = _export_url(kind, url)
+            text = collect.run_tab_js(url, _sync_xhr_js(exp), chars) if exp else ""
+            note = ""
+            if text.startswith("__HANDLE_HTTP__"):
+                code = text[len("__HANDLE_HTTP__"):][:3]
+                note = (f"Export blocked (HTTP {code}) — the file owner may have disabled "
+                        "download/export, or you're not signed in to this Google account in Chrome.")
+                text = ""
+            elif not exp:
+                note = "Could not parse the file id from the URL."
+            elif not text:
+                note = "Export returned nothing — not signed in, or no access to the file."
+            return {**base, "source": "export", "chars": len(text), "content": text, "note": note}
 
-    if kind in ("gdoc", "gsheet", "gslides"):
-        exp = _export_url(kind, url)
-        text = collect.run_tab_js(url, _sync_xhr_js(exp), chars) if exp else ""
-        note = ""
-        if text.startswith("__HANDLE_HTTP__"):
-            code = text[len("__HANDLE_HTTP__"):][:3]
-            note = (f"Export blocked (HTTP {code}) — the file owner may have disabled "
-                    "download/export, or you're not signed in to this Google account in Chrome.")
-            text = ""
-        elif not exp:
-            note = "Could not parse the file id from the URL."
-        elif not text:
-            note = "Export returned nothing — not signed in, or no access to the file."
-        return {**base, "source": "export", "chars": len(text), "content": text, "note": note}
+        if kind == "html":
+            if md_mode:
+                md = collect.read_tab_markdown(url, limit=chars)
+                return {**base, "source": "markdown", "chars": len(md), "content": md,
+                        "note": "" if md else "No DOM content (Allow JavaScript from Apple Events off?)."}
+            source, content = "cache", tab.get("snippet", "")
+            if args.live or not content:
+                live = collect.read_tab_content(url, limit=chars)
+                if live:
+                    source, content = "live", live
+            content = content[:chars]
+            return {**base, "source": source, "chars": len(content), "content": content}
 
-    if kind in ("pdf", "office"):
-        note = ("PDF — not readable as tab text. For a public PDF, WebFetch the URL."
-                if kind == "pdf" else
-                "Office web viewer — content is iframed, not in the DOM. Not supported "
-                "(needs the Microsoft Graph API).")
-        return {**base, "source": kind, "chars": 0, "content": "", "note": note}
+    # figma / pdf / office, or --shot on anything → screenshot catch-all
+    return _screenshot_payload(tab, kind, args)
 
-    # html
-    if md_mode:
-        md = collect.read_tab_markdown(url, limit=chars)
-        return {**base, "source": "markdown", "chars": len(md), "content": md,
-                "note": "" if md else "No DOM content (Allow JavaScript from Apple Events off?)."}
-    source, content = "cache", tab.get("snippet", "")
-    if args.live or not content:
-        live = collect.read_tab_content(url, limit=chars)
-        if live:
-            source, content = "live", live
-    content = content[:chars]
-    return {**base, "source": source, "chars": len(content), "content": content}
+
+def _format_shot_block(p: dict) -> str:
+    head = f"# {p['title']}  ·  {p['kind']} (screenshot)"
+    figref = ""
+    if p["kind"] == "figma" and p.get("file_key"):
+        figref = (f"\n[Figma file {p['file_key']}"
+                  + (f", node {p['node_id']}" if p.get("node_id") else "") + "]")
+    if p["shots"]:
+        return (f"{head}\n{p['url']}{figref}\n\n"
+                f"{len(p['shots'])} screenshot(s) — Read these image files to see the tab:\n"
+                + "\n".join(p["shots"]))
+    return f"{head}\n{p['url']}{figref}\n\n({p['note']})"
 
 
 def cmd_read(args) -> None:
@@ -357,24 +379,36 @@ def cmd_read(args) -> None:
 
     blocks = []
     for p in payloads:
+        if p.get("source") == "screenshot":
+            blocks.append(_format_shot_block(p))
+            continue
         head = f"# {p['title']}"
         if p["kind"] != "html":
             head += f"  ·  {p['kind']}"
         elif p["source"] == "cache":
             head += "  ·  cached (use --live for full page)"
-        body = p["content"]
-        if not body:
-            if p["kind"] == "figma":
-                body = (f"[Figma file {p.get('file_key')}"
-                        + (f", node {p['node_id']}" if p.get("node_id") else "")
-                        + f"]\n→ {p['note']}")
-            elif p.get("note"):
-                body = f"({p['note']})"
-            else:
-                body = ("(No content. Enable Chrome → View → Developer → "
-                        "'Allow JavaScript from Apple Events'.)")
+        body = p["content"] or (
+            f"({p['note']})" if p.get("note") else
+            "(No content. Enable Chrome → View → Developer → 'Allow JavaScript from Apple Events'.)")
         blocks.append(f"{head}\n{p['url']}\n\n{body}")
     print("\n\n———\n\n".join(blocks))
+
+
+def cmd_shot(args) -> None:
+    """Screenshot a tab so the agent can read it with vision — the catch-all
+    for anything the DOM can't give you (Figma, PDFs, Office, charts)."""
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    shots, err = collect.screenshot_tab(tab["url"], full=args.full)
+    if args.json:
+        print(json.dumps({"id": tab["id"], "title": tab["title"], "url": tab["url"],
+                          "shots": shots, "error": err}, indent=2, ensure_ascii=False))
+        return
+    if not shots:
+        print(f"Could not screenshot {tab['id']}  {tab['title']}\n({err})")
+        return
+    print(f"# {tab['title']} — {len(shots)} screenshot(s)\n{tab['url']}\n\n"
+          "Read these image files to see the tab:\n" + "\n".join(shots))
 
 
 def cmd_grep(args) -> None:
@@ -536,10 +570,20 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read the live rendered page now instead of the cached snippet")
     sr.add_argument("--md", action="store_true",
                     help="convert the page to Markdown (headings/lists/links/tables) — best for text-heavy HTML")
+    sr.add_argument("--shot", action="store_true",
+                    help="screenshot the tab instead of reading text (the agent reads it with vision)")
+    sr.add_argument("--full", action="store_true",
+                    help="with --shot/figma/pdf: scroll and capture the whole page, not just the viewport")
     sr.add_argument("--chars", type=int, default=None,
                     help="max characters per tab (default 8000, or 20000 with --md)")
     sr.add_argument("--json", action="store_true")
     sr.set_defaults(func=cmd_read)
+
+    ssh = sub.add_parser("shot", help="screenshot a tab for the agent to read with vision")
+    ssh.add_argument("ref")
+    ssh.add_argument("--full", action="store_true", help="scroll and capture the whole page")
+    ssh.add_argument("--json", action="store_true")
+    ssh.set_defaults(func=cmd_shot)
 
     ss = sub.add_parser("show", help="full detail for one or more tabs")
     ss.add_argument("refs", nargs="+")

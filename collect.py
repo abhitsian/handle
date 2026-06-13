@@ -8,12 +8,14 @@ no API keys. Run directly to refresh state.json, or import `collect()`.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -416,6 +418,98 @@ def read_tab_content(url: str, limit: int = 8000) -> str:
     """
     raw = run_tab_js(url, MAIN_CONTENT_JS, limit * 3)
     return " ".join(raw.split())[:limit]
+
+
+SHOTS_DIR = APP_DIR / "shots"
+
+
+def _front_window_region() -> tuple[int, int, int, int] | None:
+    """Screen rectangle (x, y, w, h) of Chrome's front window, global coords."""
+    try:
+        out = subprocess.run(
+            ["osascript", "-e",
+             'tell application "Google Chrome" to get bounds of front window'],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        b = [int(x) for x in out.stdout.strip().split(", ")]
+        return (b[0], b[1], b[2] - b[0], b[3] - b[1])
+    except Exception:
+        return None
+
+
+def _capture_region(region, path: Path) -> tuple[bool, str]:
+    """screencapture the rect to `path`. Returns (ok, error). A failure here is
+    almost always the macOS Screen Recording permission missing for this
+    terminal ('could not create image')."""
+    x, y, w, h = region
+    try:
+        r = subprocess.run(
+            ["screencapture", "-x", "-o", "-R", f"{x},{y},{w},{h}", str(path)],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    err = (r.stderr or r.stdout or "").strip()
+    if r.returncode != 0 or not path.exists() or path.stat().st_size < 1000:
+        if "could not create image" in err.lower() or not path.exists():
+            err = ("screencapture couldn't capture — grant Screen Recording to "
+                   "your terminal in System Settings → Privacy & Security → "
+                   "Screen Recording, then retry.")
+        return False, err
+    return True, ""
+
+
+def screenshot_tab(url: str, full: bool = False, max_shots: int = 6):
+    """Bring the tab to the front and capture its window to PNG(s).
+
+    The catch-all reader: works for anything rendered — Figma, PDFs, Office
+    viewers — because it reads pixels, not the DOM. `full` scrolls the page and
+    captures successive viewports. Returns (list_of_paths, error_message).
+    Needs macOS Screen Recording permission for the terminal running this.
+    """
+    if not focus_tab(url):
+        return [], "tab not found in Chrome"
+    SHOTS_DIR.mkdir(exist_ok=True)
+    time.sleep(0.6)  # let the window come forward and settle
+    key = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+    paths: list[str] = []
+
+    if not full:
+        region = _front_window_region()
+        if not region:
+            return [], "could not read Chrome window bounds"
+        p = SHOTS_DIR / f"{key}-0.png"
+        ok, err = _capture_region(region, p)
+        return ([str(p)], "") if ok else ([], err)
+
+    run_tab_js(url, "window.scrollTo(0,0)")
+    time.sleep(0.3)
+    last = -1
+    for idx in range(max_shots):
+        region = _front_window_region()
+        if not region:
+            break
+        p = SHOTS_DIR / f"{key}-{idx}.png"
+        ok, err = _capture_region(region, p)
+        if not ok:
+            return (paths, "") if paths else ([], err)
+        paths.append(str(p))
+        pos = run_tab_js(url, "(function(){window.scrollBy(0,Math.round(innerHeight*0.92));"
+                              "return ''+Math.round(window.scrollY);})()")
+        try:
+            pos = int(pos)
+        except (TypeError, ValueError):
+            break
+        if pos <= last:  # reached the bottom — no further progress
+            break
+        last = pos
+        time.sleep(0.45)
+    return paths, ""
 
 
 if __name__ == "__main__":

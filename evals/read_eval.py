@@ -117,33 +117,44 @@ if by_kind.get("gsheet"):
 else:
     skip("gsheet", "none open")
 
-# Office — must NOT pretend; empty + explanation
-if by_kind.get("office"):
-    t = by_kind["office"][0]
+# Figma / PDF / Office route to the screenshot catch-all: read() must return
+# source=screenshot with PNG path(s), OR (no Screen Recording permission) a
+# clear note. Figma additionally carries file_key for the MCP option.
+def check_visual(kind):
+    if not by_kind.get(kind):
+        skip(kind, "none open")
+        return
+    t = by_kind[kind][0]
     p = read(t)
-    ok("office · empty + explains itself",
-       p["kind"] == "office" and p["chars"] == 0 and bool(p.get("note")), t["id"])
-else:
-    skip("office", "none open")
+    captured = p.get("source") == "screenshot" and bool(p.get("shots"))
+    graceful = bool(p.get("note"))
+    detail = f"{t['id']} shots={len(p.get('shots') or [])} note={(p.get('note') or '')[:36]}"
+    ok(f"{kind} · screenshot or clear note",
+       p["kind"] == kind and (captured or graceful), detail)
+    if kind == "figma":
+        ok("figma · also exposes file_key for the MCP",
+           bool(p.get("file_key")), str(p.get("file_key")))
 
-# Figma — pointer, never a scrape
-if by_kind.get("figma"):
-    t = by_kind["figma"][0]
-    p = read(t)
-    ok("figma · file_key, no scraped text",
-       p["kind"] == "figma" and bool(p.get("file_key")) and p["chars"] == 0,
-       str(p.get("file_key")))
-else:
-    skip("figma", "none open")
 
-# PDF — pointer + reason
-if by_kind.get("pdf"):
-    t = by_kind["pdf"][0]
-    p = read(t)
-    ok("pdf · empty + explains itself",
-       p["kind"] == "pdf" and bool(p.get("note")), t["id"])
+check_visual("office")
+check_visual("figma")
+check_visual("pdf")
+
+
+# ----------------------------------------------------- 2b. screenshot catch-all
+if tabs:
+    target = (by_kind.get("html") or tabs)[0]
+    shots, err = collect.screenshot_tab(target["url"])
+    if shots:
+        from pathlib import Path as _P
+        big = all(_P(s).exists() and _P(s).stat().st_size > 1000 for s in shots)
+        ok("shot · captures a real PNG", big, f"{target['id']} → {shots[0].split('/')[-1]}")
+    elif "screen recording" in (err or "").lower():
+        skip("shot", "Screen Recording permission not granted")
+    else:
+        ok("shot · captures a real PNG", False, err)
 else:
-    skip("pdf", "none open")
+    skip("shot", "no tabs open")
 
 
 # ----------------------------------------------- 3. describe without the number
