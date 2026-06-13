@@ -154,6 +154,23 @@
   .section h2 { font-size:clamp(24px,3vw,30px); font-weight:700; letter-spacing:-0.02em; margin-bottom:8px; }
   .section .sub { color:var(--ink-soft); font-size:14.5px; max-width:42em; }
 
+  /* ---- HOW-IT-WORKS DIAGRAM ---- */
+  .diagram { margin-top:28px; background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; padding:18px clamp(12px,2vw,24px); }
+  .diagram svg { width:100%; height:auto; display:block; }
+  .d-kicker { font-family:"JetBrains Mono",monospace; font-size:10.5px; fill:var(--ink-faint);
+    letter-spacing:.1em; }
+  .d-title { font-family:"Space Grotesk",sans-serif; font-size:16px; font-weight:600; fill:var(--ink); }
+  .d-line { font-family:"Space Grotesk",sans-serif; font-size:12px; fill:var(--ink-soft); }
+  .d-sub { font-family:"JetBrains Mono",monospace; font-size:10.5px; fill:var(--ink-soft); }
+  .d-mono { font-family:"JetBrains Mono",monospace; font-size:11.5px; fill:var(--ink-soft); }
+  .d-mint { fill:var(--mint); font-weight:600; }
+  .d-cap { font-family:"JetBrains Mono",monospace; font-size:10.5px; fill:var(--mint); letter-spacing:.04em; }
+  .d-chip { font-family:"JetBrains Mono",monospace; font-size:11px; font-weight:700; fill:#06140e; }
+  .d-tab rect:first-child { fill:var(--mint); }
+  .d-tab .d-bar { fill:#22323d; }
+  .d-foot { font-family:"Space Grotesk",sans-serif; font-size:11.5px; fill:var(--ink-faint); }
+
   /* reveal-on-scroll */
   .reveal { opacity:0; transform:translateY(18px); transition:opacity .6s ease, transform .6s ease; }
   .reveal.in { opacity:1; transform:none; }
@@ -291,7 +308,7 @@
       </div>
       <div class="feature">
         <h3><span class="ic">📖</span> Read past the login wall</h3>
-        <p>The headline. <code>read</code> pulls a tab's live, rendered text from your already-authenticated browser — the logged-in SharePoint doc, the Figma page, the gated newsletter — and extracts the main article, dropping nav and footer chrome.</p>
+        <p>The headline. <code>read</code> pulls a tab's live, rendered text from your already-authenticated browser — the logged-in SharePoint doc, the Figma page, the gated newsletter — and extracts the main article, dropping nav and footer chrome. Add <code>--md</code> to get it back as clean <b>Markdown</b> — headings, lists, links, tables intact — ready to drop in as context.</p>
       </div>
       <div class="feature">
         <h3><span class="ic">🔍</span> Grep what's open</h3>
@@ -316,9 +333,68 @@
   <section class="section reveal">
     <h2>How it works</h2>
     <p class="sub">Handle calls no AI API of its own. It reads your real Chrome locally; your Claude Code session does the thinking. One shared file of handles is all the board and the agent need.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 980 360" role="img" aria-label="How Handle works: your Chrome tabs get a handle, Handle reads them format-aware, your agent uses the content.">
+        <defs>
+          <linearGradient id="node" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#13202a"/><stop offset="1" stop-color="#0d161d"/>
+          </linearGradient>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#4fe0b0"/>
+          </marker>
+        </defs>
+
+        <!-- flow lines (drawn first, behind nodes) -->
+        <line x1="266" y1="120" x2="356" y2="120" stroke="#2c4a42" stroke-width="2" marker-end="url(#arrow)"/>
+        <line x1="624" y1="120" x2="714" y2="120" stroke="#2c4a42" stroke-width="2" marker-end="url(#arrow)"/>
+        <circle r="4.5" fill="#4fe0b0"><animate attributeName="cx" values="266;356" dur="1.8s" repeatCount="indefinite"/><animate attributeName="cy" values="120;120" dur="1.8s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" dur="1.8s" repeatCount="indefinite"/></circle>
+        <circle r="4.5" fill="#4fe0b0"><animate attributeName="cx" values="624;714" dur="1.8s" begin="0.9s" repeatCount="indefinite"/><animate attributeName="cy" values="120;120" dur="1.8s" begin="0.9s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" dur="1.8s" begin="0.9s" repeatCount="indefinite"/></circle>
+        <text x="311" y="110" text-anchor="middle" class="d-cap">a handle</text>
+        <text x="669" y="110" text-anchor="middle" class="d-cap">its content</text>
+
+        <!-- 1 · Your Chrome -->
+        <g>
+          <rect x="20" y="40" width="246" height="160" rx="14" fill="url(#node)" stroke="#22323d"/>
+          <text x="40" y="68" class="d-kicker">01 · YOUR CHROME</text>
+          <text x="40" y="90" class="d-title">Open tabs</text>
+          <g class="d-tab"><rect x="40" y="104" width="60" height="20" rx="5"/><text x="52" y="118" class="d-chip">t1</text><rect x="106" y="110" width="130" height="8" rx="4" class="d-bar"/></g>
+          <g class="d-tab"><rect x="40" y="132" width="60" height="20" rx="5"/><text x="52" y="146" class="d-chip">t2</text><rect x="106" y="138" width="110" height="8" rx="4" class="d-bar"/></g>
+          <g class="d-tab"><rect x="40" y="160" width="60" height="20" rx="5"/><text x="52" y="174" class="d-chip">t3</text><rect x="106" y="166" width="124" height="8" rx="4" class="d-bar"/></g>
+        </g>
+
+        <!-- 2 · Handle -->
+        <g>
+          <rect x="356" y="40" width="268" height="160" rx="14" fill="url(#node)" stroke="#2c5247"/>
+          <text x="376" y="68" class="d-kicker" fill="#4fe0b0">02 · HANDLE</text>
+          <text x="376" y="90" class="d-title">Name it &amp; read it</text>
+          <text x="376" y="116" class="d-line"><tspan class="d-mint">name</tspan> — "the figma tab", t3, active</text>
+          <text x="376" y="140" class="d-line"><tspan class="d-mint">read</tspan> — live, logged-in, format-aware:</text>
+          <text x="392" y="160" class="d-sub">html → text / markdown</text>
+          <text x="392" y="176" class="d-sub">docs · sheets → export</text>
+          <text x="392" y="192" class="d-sub">figma · pdf · office → screenshot → 👁</text>
+        </g>
+
+        <!-- 3 · Claude Code -->
+        <g>
+          <rect x="714" y="40" width="246" height="160" rx="14" fill="url(#node)" stroke="#22323d"/>
+          <text x="734" y="68" class="d-kicker">03 · CLAUDE CODE</text>
+          <text x="734" y="90" class="d-title">Works with it</text>
+          <text x="734" y="120" class="d-mono">&gt; summarize the figma tab</text>
+          <text x="734" y="142" class="d-mono" fill="#4fe0b0">→ reads tab t3</text>
+          <text x="734" y="170" class="d-sub">summarize · task · compare ·</text>
+          <text x="734" y="186" class="d-sub">ingest — whatever the session can do</text>
+        </g>
+
+        <!-- footnote -->
+        <text x="490" y="250" text-anchor="middle" class="d-foot">No API key. Handle reads pixels &amp; text locally; the agent does the thinking.</text>
+        <text x="490" y="272" text-anchor="middle" class="d-foot">Same handle <tspan class="d-mint">t3</tspan> on the board and in the session — and the same tools over MCP.</text>
+      </svg>
+    </div>
+
     <div class="loop">
       <div class="lstep"><div class="k">01 · reference</div><h4>Name the tab</h4><p>You point at a tab the way you'd say it out loud — "the figma tab," "tab 7," "what I'm looking at." Handle resolves it to a stable handle.</p></div>
-      <div class="lstep"><div class="k">02 · read</div><h4>Pull the content</h4><p>It runs JavaScript inside that live tab to extract the rendered text — logged in, past the wall — for a few hundred tokens. Cached by default; <code>--live</code> for a fresh full page.</p></div>
+      <div class="lstep"><div class="k">02 · read</div><h4>Pull the content</h4><p>It runs JavaScript inside that live tab to extract the rendered text — logged in, past the wall — for a few hundred tokens. Cached by default; <code>--live</code> for a fresh full page; <code>--md</code> to get clean <b>Markdown</b> (headings, lists, links, tables) for use as context.</p></div>
       <div class="lstep"><div class="k">03 · act</div><h4>Work with it</h4><p>The text is in the conversation. Summarize it, turn it into a task, compare it across tabs, ingest it — whatever the session's skills and tools can do.</p></div>
     </div>
     <pre><button class="copy" onclick="copyCode(this)">copy</button><code><span class="c"># in any Claude Code session — say it in plain English, or run tab directly</span>
@@ -327,7 +403,8 @@
 <span class="cmd">tab read active</span>           <span class="c"># the tab you're looking at, right now</span>
 <span class="cmd">tab read t3</span>                <span class="c"># cached &amp; instant</span>
 <span class="cmd">tab read t29 t30 t4</span>        <span class="c"># a whole cluster in one call</span>
-<span class="cmd">tab read t3 --live</span>         <span class="c"># fresh full page, nav stripped</span></code></pre>
+<span class="cmd">tab read t3 --live</span>         <span class="c"># fresh full page, nav stripped</span>
+<span class="cmd">tab read t3 --md</span>           <span class="c"># convert to clean Markdown — headings, lists, links, tables</span></code></pre>
   </section>
 
   <!-- MCP -->
