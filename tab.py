@@ -338,6 +338,14 @@ def _read_one(tab: dict, args) -> dict:
                 note = "Export returned nothing — not signed in, or no access to the file."
             return {**base, "source": "export", "chars": len(text), "content": text, "note": note}
 
+        if kind == "office":
+            # SharePoint/Office Word → pull the real .docx text (download + unzip).
+            # Falls through to the screenshot catch-all for Excel/PPT or on failure.
+            olimit = args.chars if args.chars is not None else 40000
+            text = collect.read_office_docx(url, limit=olimit)
+            if text:
+                return {**base, "source": "docx", "chars": len(text), "content": text, "note": ""}
+
         if kind == "html":
             if md_mode:
                 md = collect.read_tab_markdown(url, limit=chars)

@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html as _html
+import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import tempfile
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -510,6 +514,48 @@ def screenshot_tab(url: str, full: bool = False, max_shots: int = 6):
         last = pos
         time.sleep(0.45)
     return paths, ""
+
+
+def read_office_docx(url: str, limit: int = 40000) -> str:
+    """Extract the full text of a SharePoint/Office Word doc, no clicking.
+
+    A .docx is a zip of XML. We download the file itself via a synchronous
+    in-tab XHR — same-origin, so it rides the user's SharePoint login — pull
+    it back as base64 (byte-masked, since sync XHR can't do arraybuffer),
+    unzip word/document.xml, and strip the tags. Beats screenshotting the
+    cross-origin Office viewer (which only yields one page). Word only;
+    returns "" if it isn't a SharePoint Word URL or the download fails.
+    """
+    low = url.lower()
+    is_word = ":w:" in low or low.split("?")[0].endswith(".docx")
+    if not is_word:
+        return ""
+    # The viewer URL looks like https://host/:w:/r/sites/<site>/_layouts/15/Doc.aspx?sourcedoc=%7BGUID%7D
+    host = re.match(r"(https://[^/]+)", url)
+    site = re.search(r"/sites/([^/?]+)", url)
+    guid = re.search(r"sourcedoc=%7B([0-9A-Fa-f-]+)%7D", url) or re.search(r"sourcedoc=\{?([0-9A-Fa-f-]+)", url)
+    if not (host and site and guid):
+        return ""
+    dl = (f"{host.group(1)}/sites/{site.group(1)}"
+          f"/_layouts/15/download.aspx?UniqueId=%7B{guid.group(1)}%7D")
+    js = ("(function(){try{var x=new XMLHttpRequest();x.open('GET','" + dl + "',false);"
+          "x.overrideMimeType('text/plain; charset=x-user-defined');x.send();"
+          "if(x.status!==200)return '';var t=x.responseText,s='';"
+          "for(var i=0;i<t.length;i++)s+=String.fromCharCode(t.charCodeAt(i)&255);"
+          "return btoa(s);}catch(e){return '';}})()")
+    data = run_tab_js(url, js, limit=30_000_000)
+    if not data or data.startswith(("HTTP", "ERR")):
+        return ""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(base64.b64decode(data)))
+        xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except Exception:
+        return ""
+    xml = re.sub(r"</w:p>", "\n", xml)
+    xml = re.sub(r"<w:tab[^>]*/>", "\t", xml)
+    text = _html.unescape(re.sub(r"<[^>]+>", "", xml))
+    text = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", text).strip()
+    return text[:limit]
 
 
 if __name__ == "__main__":
