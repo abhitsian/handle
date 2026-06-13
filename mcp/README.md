@@ -20,7 +20,9 @@ vision.
 | `list_tabs` | open tabs with stable handles (t1, t2…), groups, stale flags |
 | `find_tab` | resolve a fuzzy name → handle (title/url/group/note) |
 | `grep_tabs` | search the on-page content of every tab |
-| `ask_tabs` | answer a question across open tabs — ranks, reads the relevant ones, returns a cited bundle |
+| `ask_tabs` | answer a question across open tabs (and saved bundles) — ranks, reads, returns a cited bundle |
+| `save_tabs` | capture tab content into a dated research bundle for later |
+| `list_bundles` / `recall_bundle` | list saved bundles · load one back as context |
 | `read_tab` | read tab(s): HTML text / Markdown (`md`) / Google export / Figma·PDF·Office screenshot |
 | `screenshot_tab` | capture a tab as image(s) to read with vision (`full` for whole page) |
 | `active_tab` | the frontmost tab — "what I'm looking at" |

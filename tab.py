@@ -41,6 +41,7 @@ import collect
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
 DEDUCTIONS_PATH = APP_DIR / "deductions.json"
+BUNDLES_DIR = APP_DIR / "bundles"  # saved research captures (gitignored)
 STALE_DAYS = 3
 
 
@@ -491,21 +492,32 @@ def cmd_ask(args) -> None:
         score = sum(title.count(w) * 3 + snip.count(w) for w in terms)
         if score:
             scored.append((score, t))
+    # also search saved research bundles when --saved (capture → recall → ask)
+    if getattr(args, "saved", False):
+        for src in _saved_sources():
+            low, title = src["content"].lower(), src["title"].lower()
+            score = sum(title.count(w) * 3 + low.count(w) for w in terms)
+            if score:
+                scored.append((score, src))
     scored.sort(key=lambda x: -x[0])
     top = scored[:args.tabs]
 
     if not top:
-        msg = (f"No open tab mentions {terms or [question]}. Searched titles + cached "
-               "page content — run `tab refresh` to re-scan, or rephrase the question.")
+        where = "open tabs" + (" or saved bundles" if getattr(args, "saved", False) else "")
+        msg = (f"Nothing in your {where} mentions {terms or [question]}. "
+               "Run `tab refresh`, try `--saved`, or rephrase the question.")
         print(json.dumps({"question": question, "terms": terms, "sources": []}) if args.json else msg)
         return
 
     sources = []
     for score, t in top:
-        p = _read_one(t, _ReadArgs(args.chars))
-        content = p.get("content") or t["snippet"] or t["summary"] or ""
+        if t.get("_saved"):                      # already-captured bundle source
+            content, kind = t["content"], t.get("kind", "saved")
+        else:                                    # live tab — read it fresh
+            p = _read_one(t, _ReadArgs(args.chars))
+            content, kind = (p.get("content") or t["snippet"] or t["summary"] or ""), p.get("kind", "html")
         sources.append({"id": t["id"], "title": t["title"], "url": t["url"],
-                        "score": score, "kind": p.get("kind", "html"), "content": content[:args.chars]})
+                        "score": score, "kind": kind, "content": content[:args.chars]})
 
     if args.json:
         print(json.dumps({"question": question, "terms": terms, "sources": sources}, indent=2, ensure_ascii=False))
@@ -520,6 +532,155 @@ def cmd_ask(args) -> None:
         print(f"\n### {s['id']} · {s['title']}\n{s['url']}\n\n{s['content']}\n")
     print("=" * 60)
     print("→ Answer the question from these sources; cite tabs by handle (e.g. t3).")
+
+
+# --------------------------------------------------------------------------- #
+# saved research bundles — capture tab content now, recall it later
+# --------------------------------------------------------------------------- #
+def _slug(s: str) -> str:
+    return (re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:60]) or "bundle"
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            return parts[2].strip()
+    return text
+
+
+def _saved_sources() -> list[dict]:
+    """Every captured tab across all bundles, as ask-able source records."""
+    out = []
+    if not BUNDLES_DIR.exists():
+        return out
+    for mf in BUNDLES_DIR.glob("*/manifest.json"):
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for e in m.get("tabs", []):
+            f = mf.parent / e["file"]
+            if not f.exists():
+                continue
+            out.append({"id": f"{e['handle']}@{m.get('slug', mf.parent.name)}",
+                        "title": f"{e['title']} (saved: {m.get('label', '')})",
+                        "url": e["url"], "kind": e.get("kind", "saved"),
+                        "content": _strip_frontmatter(f.read_text(encoding="utf-8")),
+                        "_saved": True})
+    return out
+
+
+def cmd_save(args) -> None:
+    """Snapshot the content of a set of open tabs into a labeled, dated bundle —
+    so the research survives the tabs being closed and the session ending."""
+    tabs = load_tabs()
+    if args.group:
+        picked = [t for t in tabs if args.group.lower() in t["group"].lower()]
+    elif args.all:
+        picked = tabs
+    elif args.refs:
+        seen, picked = set(), []
+        for ref in args.refs:
+            for t in resolve(ref, tabs):
+                if t["id"] not in seen:
+                    seen.add(t["id"])
+                    picked.append(t)
+    else:
+        print("Nothing to save. Give tab refs, --group <name>, or --all.")
+        sys.exit(1)
+    if not picked:
+        print("No tabs matched.")
+        sys.exit(1)
+
+    label = args.as_ or args.group or "research"
+    slug = _slug(label)
+    now = datetime.now(timezone.utc)
+    bdir = BUNDLES_DIR / f"{now.strftime('%Y-%m-%d')}-{slug}"
+    bdir.mkdir(parents=True, exist_ok=True)
+    created = now.isoformat()
+
+    entries = []
+    for t in picked:
+        p = _read_one(t, _ReadArgs(args.chars))
+        content = p.get("content") or t["snippet"] or ""
+        fname = f"{t['id']}-{_slug(t['title'])[:40]}.md"
+        fm = (f"---\ntitle: {t['title']}\nurl: {t['url']}\nhandle: {t['id']}\n"
+              f"kind: {p.get('kind', 'html')}\ncaptured: {created}\n---\n\n")
+        (bdir / fname).write_text(fm + (content or "(no readable content captured)"), encoding="utf-8")
+        entries.append({"handle": t["id"], "title": t["title"], "url": t["url"],
+                        "kind": p.get("kind", "html"), "file": fname, "chars": len(content)})
+
+    manifest = {"label": label, "slug": slug, "created": created,
+                "tab_count": len(entries), "tabs": entries}
+    (bdir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    idx = [f"# {label}", f"_Captured {created[:10]} · {len(entries)} tab(s)_", ""]
+    idx += [f"- **{e['handle']}** [{e['title']}]({e['url']}) — {e['kind']}, {e['chars']} chars → `{e['file']}`"
+            for e in entries]
+    (bdir / "INDEX.md").write_text("\n".join(idx) + "\n", encoding="utf-8")
+
+    if args.json:
+        print(json.dumps({"saved": str(bdir), **manifest}, indent=2, ensure_ascii=False))
+        return
+    print(f"Saved {len(entries)} tab(s) → bundle '{slug}'  ({bdir})")
+    for e in entries:
+        print(f"  {e['handle']:>4}  {e['title'][:58]}  ({e['chars']}c)")
+    print(f"Recall later: tab recall {slug}   ·   search it: tab ask \"…\" --saved")
+
+
+def cmd_bundles(args) -> None:
+    BUNDLES_DIR.mkdir(exist_ok=True)
+    items = []
+    for mf in BUNDLES_DIR.glob("*/manifest.json"):
+        try:
+            items.append((mf.parent.name, json.loads(mf.read_text(encoding="utf-8"))))
+        except Exception:
+            continue
+    items.sort(key=lambda x: x[1].get("created", ""), reverse=True)
+    if args.json:
+        print(json.dumps([{"dir": d, **m} for d, m in items], indent=2, ensure_ascii=False))
+        return
+    if not items:
+        print("No saved bundles yet. Capture one with `tab save <refs> --as <name>`.")
+        return
+    print(f"{len(items)} saved bundle(s):\n")
+    for d, m in items:
+        print(f"  {m.get('label', '?')}  ·  {m.get('tab_count', 0)} tab(s)  ·  {m.get('created', '')[:10]}  ·  {d}")
+
+
+def cmd_recall(args) -> None:
+    BUNDLES_DIR.mkdir(exist_ok=True)
+    q = args.name.lower()
+    matches = []
+    for mf in BUNDLES_DIR.glob("*/manifest.json"):
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if q in mf.parent.name.lower() or q in m.get("label", "").lower():
+            matches.append((mf.parent, m))
+    if not matches:
+        print(f"No bundle matches {args.name!r}. `tab bundles` to list them.")
+        return
+    if len(matches) > 1 and not args.json:
+        print(f"{len(matches)} bundles match {args.name!r} — be specific:")
+        for d, m in matches:
+            print(f"  {m.get('label')}  ·  {d.name}")
+        return
+    d, m = matches[0]
+    srcs = []
+    for e in m["tabs"]:
+        f = d / e["file"]
+        srcs.append({"handle": e["handle"], "title": e["title"], "url": e["url"],
+                     "content": _strip_frontmatter(f.read_text(encoding="utf-8")) if f.exists() else ""})
+    if args.json:
+        print(json.dumps({"label": m.get("label"), "created": m.get("created"), "sources": srcs},
+                         indent=2, ensure_ascii=False))
+        return
+    print(f"# {m.get('label')} (captured {m.get('created', '')[:10]} · {len(srcs)} tab(s))")
+    for s in srcs:
+        body = s["content"][:args.chars] if args.chars else s["content"]
+        print(f"\n### {s['handle']} · {s['title']}\n{s['url']}\n\n{body}\n")
 
 
 def cmd_show(args) -> None:
@@ -640,8 +801,28 @@ def build_parser() -> argparse.ArgumentParser:
     sa2.add_argument("question", nargs="+", help="the question, in plain words")
     sa2.add_argument("--tabs", type=int, default=5, help="max tabs to pull (default 5)")
     sa2.add_argument("--chars", type=int, default=4000, help="max characters per source")
+    sa2.add_argument("--saved", action="store_true", help="also search saved research bundles, not just open tabs")
     sa2.add_argument("--json", action="store_true")
     sa2.set_defaults(func=cmd_ask)
+
+    sv = sub.add_parser("save", help="snapshot tab content into a dated bundle for later reference")
+    sv.add_argument("refs", nargs="*", help="tab references to save (or use --group / --all)")
+    sv.add_argument("--as", dest="as_", help="label for the bundle (e.g. 'vendor-research')")
+    sv.add_argument("--group", help="save all tabs in this group")
+    sv.add_argument("--all", action="store_true", help="save every open tab")
+    sv.add_argument("--chars", type=int, default=20000, help="max characters captured per tab")
+    sv.add_argument("--json", action="store_true")
+    sv.set_defaults(func=cmd_save)
+
+    sb = sub.add_parser("bundles", help="list saved research bundles")
+    sb.add_argument("--json", action="store_true")
+    sb.set_defaults(func=cmd_bundles)
+
+    srec = sub.add_parser("recall", help="load a saved bundle's content as context")
+    srec.add_argument("name", help="bundle name/label (or a substring)")
+    srec.add_argument("--chars", type=int, default=6000, help="max characters per source (0 = full)")
+    srec.add_argument("--json", action="store_true")
+    srec.set_defaults(func=cmd_recall)
 
     sr = sub.add_parser("read", help="page text of one or more tabs (cached; --live for full)")
     sr.add_argument("refs", nargs="+", help="one or more tab references")

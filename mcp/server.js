@@ -79,6 +79,24 @@ function toolAskTabs(a) {
   const args = ['ask', String(a.question)];
   if (a.tabs != null) args.push('--tabs', String(a.tabs));
   if (a.chars != null) args.push('--chars', String(a.chars));
+  if (a.saved) args.push('--saved');
+  return [{ type: 'text', text: runTab(args) }];
+}
+
+function toolSaveTabs(a) {
+  const args = ['save'];
+  if (Array.isArray(a.refs)) args.push(...a.refs.map(String));
+  else if (a.refs) args.push(String(a.refs));
+  if (a.group) args.push('--group', String(a.group));
+  if (a.all) args.push('--all');
+  if (a.as) args.push('--as', String(a.as));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolListBundles() { return [{ type: 'text', text: runTab(['bundles']) }]; }
+function toolRecallBundle(a) {
+  if (!a.name) throw new Error('name is required');
+  const args = ['recall', String(a.name)];
+  if (a.chars != null) args.push('--chars', String(a.chars));
   return [{ type: 'text', text: runTab(args) }];
 }
 
@@ -186,7 +204,34 @@ const TOOLS = [
       question: { type: 'string', description: 'The question, in plain words.' },
       tabs: { type: 'number', description: 'Max tabs to pull (default 5).' },
       chars: { type: 'number', description: 'Max characters per source (default 4000).' },
+      saved: { type: 'boolean', description: 'Also search saved research bundles (capture→recall→ask), not just open tabs.' },
     }, required: ['question'] },
+  },
+  {
+    name: 'save_tabs',
+    description:
+      'Capture the content of open tabs into a saved, dated research bundle, so it survives the tabs being ' +
+      'closed and the session ending. Use when the user says "save these tabs", "keep this research", "store ' +
+      'this for later". Give refs (or group/all) and a label. Later: recall_bundle, or ask_tabs with saved:true.',
+    inputSchema: { type: 'object', properties: {
+      refs: { description: 'Tab references to save. May be an array.', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      group: { type: 'string', description: 'Save all tabs in this group instead.' },
+      all: { type: 'boolean', description: 'Save every open tab.' },
+      as: { type: 'string', description: 'Label for the bundle, e.g. "vendor-research".' },
+    } },
+  },
+  {
+    name: 'list_bundles',
+    description: 'List saved research bundles (label, tab count, date). Use to see what past research is stored.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'recall_bundle',
+    description: 'Load a saved research bundle\'s captured content as context — even after the tabs are long closed. Match by label or a substring.',
+    inputSchema: { type: 'object', properties: {
+      name: { type: 'string', description: 'Bundle label or a substring of it.' },
+      chars: { type: 'number', description: 'Max characters per source (0 = full).' },
+    }, required: ['name'] },
   },
   {
     name: 'read_tab',
@@ -255,6 +300,7 @@ const TOOLS = [
 
 const HANDLERS = {
   list_tabs: toolListTabs, find_tab: toolFindTab, grep_tabs: toolGrepTabs, ask_tabs: toolAskTabs,
+  save_tabs: toolSaveTabs, list_bundles: toolListBundles, recall_bundle: toolRecallBundle,
   read_tab: toolReadTab, screenshot_tab: toolScreenshotTab, active_tab: toolActiveTab,
   open_tab: toolOpenTab, close_tab: toolCloseTab, note_tab: toolNoteTab,
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,
