@@ -228,7 +228,7 @@
   <!-- HERO -->
   <section class="hero">
     <div class="hero-text">
-      <div class="eyebrow">macOS · Chrome · open source</div>
+      <div class="eyebrow">macOS · Chrome · MCP · open source</div>
       <h1 class="headline">Your browser is context. Give your <span class="accent">agent</span> a handle on it.</h1>
       <p class="lede">When you work in Claude Code, the tabs you have open <b>are</b> the task — the spec, the Figma, the Notion page, the docs you're logged into. Your agent can't see any of it. Handle gives every open Chrome tab a <b>stable handle</b> (<code>t1</code>, <code>t2</code>…) your session can reference, and a <code>read</code> that pulls the tab's <b>live, logged-in content</b> straight into the conversation — past the login walls and JavaScript that defeat a plain fetch.</p>
       <div class="cta-row">
@@ -328,6 +328,19 @@
 <span class="cmd">tab read t3</span>                <span class="c"># cached &amp; instant</span>
 <span class="cmd">tab read t29 t30 t4</span>        <span class="c"># a whole cluster in one call</span>
 <span class="cmd">tab read t3 --live</span>         <span class="c"># fresh full page, nav stripped</span></code></pre>
+  </section>
+
+  <!-- MCP -->
+  <section class="section reveal">
+    <h2>Or plug it into any agent — as an MCP</h2>
+    <p class="sub">Handle ships as a local <b>MCP server</b>, so any MCP client — Claude Code, Claude Desktop, another agent — can read your tabs as first-class tools, no skill files or paths to wire up. It runs on your machine and reads your Chrome; it never exposes anyone else's tabs.</p>
+    <pre><button class="copy" onclick="copyCode(this)">copy</button><code><span class="c"># register the local server with Claude Code</span>
+claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js</code></pre>
+    <div class="features" style="margin-top:22px;">
+      <div class="feature"><h3><span class="ic">🧰</span> Tools, not stdout</h3><p>Twelve tools — <code>list_tabs</code>, <code>find_tab</code>, <code>grep_tabs</code>, <code>read_tab</code>, <code>screenshot_tab</code>, <code>active_tab</code>, and the actions. The agent calls them directly; no shell, no parsing.</p></div>
+      <div class="feature"><h3><span class="ic">🖼️</span> Screenshots inline</h3><p><code>read_tab</code> on a Figma or PDF returns the capture as an <b>inline image</b> the model reads with vision — the catch-all, delivered over the protocol.</p></div>
+      <div class="feature"><h3><span class="ic">📦</span> Zero-dependency Node</h3><p>A thin wrapper over the same Python engine. Speaks MCP over stdio, no npm install. Same family as <code>sessions-mcp</code>.</p></div>
+    </div>
   </section>
 
   <!-- INSTALL -->

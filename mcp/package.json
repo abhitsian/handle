@@ -1,0 +1,11 @@
+{
+  "name": "handle-mcp",
+  "version": "1.0.0",
+  "description": "MCP server to reference and read your own open Chrome tabs — past login walls, with screenshots as vision",
+  "bin": { "handle-mcp": "server.js" },
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "files": ["server.js", "README.md"]
+}

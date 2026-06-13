@@ -7,6 +7,11 @@ belong to, pin the ones that matter, and spot the ones that have gone **stale**.
 
 The same handle (`t49`) names the tab on the board and in your session.
 
+Ships three ways: a **CLI** (`tab`), a **board** (localhost:4910), and an **MCP
+server** ([`mcp/`](mcp/)) so any agent can use it as first-class tools —
+`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. It runs
+locally and reads *your* Chrome; it never exposes anyone else's tabs.
+
 ## From Claude Code
 
 The `tab` CLI (`tab.py`) is the agent surface; the `/tabs` skill drives it from
