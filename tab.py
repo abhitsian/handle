@@ -30,6 +30,7 @@ Reference forms accepted everywhere a tab is expected:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import re
 import sys
@@ -269,10 +270,10 @@ def _sync_xhr_js(export_url: str) -> str:
             "catch(e){return '';}})()")
 
 
-def _export_url(kind: str, url: str) -> str | None:
+def _export_url(kind: str, url: str, fmt: str = "txt") -> str | None:
     if kind == "gdoc":
         m = re.search(r"/document/d/([^/]+)", url)
-        return f"https://docs.google.com/document/d/{m.group(1)}/export?format=txt" if m else None
+        return f"https://docs.google.com/document/d/{m.group(1)}/export?format={fmt}" if m else None
     if kind == "gslides":
         m = re.search(r"/presentation/d/([^/]+)", url)
         return f"https://docs.google.com/presentation/d/{m.group(1)}/export/txt" if m else None
@@ -284,6 +285,42 @@ def _export_url(kind: str, url: str) -> str | None:
         base = f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv"
         return base + (f"&gid={gid.group(1)}" if gid else "")
     return None
+
+
+# A read rung that returns the editor's chrome instead of the document is a
+# failure, not content — catch the tell-tale toolbar so the cascade falls
+# through (e.g. a Google Doc/Sheet whose body is canvas-rendered).
+_CHROME_RE = re.compile(
+    r"File\s+Edit\s+View\s+Insert\s+Format\s+Tools|Share\s+Ask\s+Gemini|"
+    r"Ask Gemini\s+File|Menu\s+Home\s+Insert\s+Draw", re.I)
+
+
+def _is_junk(text: str, kind: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if _CHROME_RE.search(t[:240]):
+        return True
+    # a "doc" kind that comes back as a sliver is almost certainly chrome
+    if kind in ("gdoc", "gsheet", "gslides", "office") and len(t) < 40:
+        return True
+    return False
+
+
+def _csv_to_md(csv_text: str, max_rows: int = 200) -> str:
+    """CSV → a Markdown table (first row as header)."""
+    import csv as _csv
+    rows = list(_csv.reader(io.StringIO(csv_text)))
+    rows = [r for r in rows if any(c.strip() for c in r)][:max_rows]
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    def line(cells):
+        cells = (cells + [""] * width)[:width]
+        return "| " + " | ".join(c.replace("|", "\\|").replace("\n", " ").strip() for c in cells) + " |"
+    out = [line(rows[0]), "| " + " | ".join(["---"] * width) + " |"]
+    out += [line(r) for r in rows[1:]]
+    return "\n".join(out)
 
 
 def _figma_ref(url: str) -> dict:
@@ -310,57 +347,87 @@ def _screenshot_payload(tab: dict, kind: str, args) -> dict:
     return p
 
 
+def _gexport(url, kind, fmt, chars):
+    """One Google-export attempt → (text, note). Markdown-first where supported."""
+    exp = _export_url(kind, url, fmt)
+    if not exp:
+        return "", "Could not parse the file id from the URL."
+    raw = collect.run_tab_js(url, _sync_xhr_js(exp), chars)
+    if raw.startswith("__HANDLE_HTTP__"):
+        code = raw[len("__HANDLE_HTTP__"):][:3]
+        return "", (f"Export blocked (HTTP {code}) — the owner may have disabled "
+                    "download/export, or you're not signed in to this Google account.")
+    if kind == "gsheet" and raw:
+        return _csv_to_md(raw), ""
+    return raw, ""
+
+
+def _text_rungs(tab, url, kind, args, chars):
+    """Ordered (source, fn→(text, note)) rungs for a kind. Markdown is the
+    default text shape; flat text is its fallback; screenshot is the floor."""
+    md_mode, live = getattr(args, "md", False), getattr(args, "live", False)
+    if kind == "html":
+        rungs = []
+        if not live and not md_mode:
+            rungs.append(("cache", lambda: (tab.get("snippet", ""), "")))
+        rungs.append(("markdown", lambda: (collect.read_tab_markdown(url, chars), "")))
+        rungs.append(("live", lambda: (collect.read_tab_content(url, chars), "")))
+        return rungs
+    if kind == "gdoc":
+        return [("export-md", lambda: _gexport(url, kind, "markdown", chars)),
+                ("export-txt", lambda: _gexport(url, kind, "txt", chars))]
+    if kind == "gslides":
+        return [("export-txt", lambda: _gexport(url, kind, "txt", chars))]
+    if kind == "gsheet":
+        return [("export-csv", lambda: _gexport(url, kind, "csv", chars))]
+    if kind == "office":
+        return [("docx", lambda: (collect.read_office_docx(url, limit=max(chars, 40000)), ""))]
+    return []  # figma / pdf / office-non-word → straight to the screenshot floor
+
+
 def _read_one(tab: dict, args) -> dict:
-    """Read one tab, routing by content type. HTML uses the cached snippet
-    (instant) or a live readability/markdown read; Google formats are pulled
-    fresh from their export endpoint; Figma/PDF/Office (and anything with
-    --shot) fall through to a screenshot the agent reads with vision."""
+    """Read one tab as a cascade: try the best text rung(s) for the content,
+    fall through when a rung returns nothing or just the editor's chrome, then
+    the screenshot floor (vision), and finally a precise note. Markdown is the
+    default text shape; never a silent blank."""
     url, kind = tab["url"], detect_kind(tab["url"])
     base = {"id": tab["id"], "title": tab["title"], "url": url, "kind": kind}
-    md_mode = getattr(args, "md", False)
-    # default budget: 8000 chars, but more for markdown/export (whole docs)
-    chars = args.chars if args.chars is not None else (20000 if md_mode else 8000)
+    chars = args.chars if args.chars is not None else (20000 if getattr(args, "md", False) else 8000)
 
-    # text-first kinds keep their text path — unless the user forces --shot
-    if not getattr(args, "shot", False):
-        if kind in ("gdoc", "gsheet", "gslides"):
-            exp = _export_url(kind, url)
-            text = collect.run_tab_js(url, _sync_xhr_js(exp), chars) if exp else ""
-            note = ""
-            if text.startswith("__HANDLE_HTTP__"):
-                code = text[len("__HANDLE_HTTP__"):][:3]
-                note = (f"Export blocked (HTTP {code}) — the file owner may have disabled "
-                        "download/export, or you're not signed in to this Google account in Chrome.")
-                text = ""
-            elif not exp:
-                note = "Could not parse the file id from the URL."
-            elif not text:
-                note = "Export returned nothing — not signed in, or no access to the file."
-            return {**base, "source": "export", "chars": len(text), "content": text, "note": note}
+    # explicit overrides
+    if getattr(args, "clipboard", False):
+        clip = collect.read_clipboard()
+        return {**base, "source": "clipboard", "chars": len(clip), "content": clip[:chars],
+                "note": "" if clip else "Clipboard is empty — copy something first."}
+    if getattr(args, "shot", False):
+        return _screenshot_payload(tab, kind, args)
 
-        if kind == "office":
-            # SharePoint/Office Word → pull the real .docx text (download + unzip).
-            # Falls through to the screenshot catch-all for Excel/PPT or on failure.
-            olimit = args.chars if args.chars is not None else 40000
-            text = collect.read_office_docx(url, limit=olimit)
-            if text:
-                return {**base, "source": "docx", "chars": len(text), "content": text, "note": ""}
+    tried, last_note = [], ""
+    for source, fn in _text_rungs(tab, url, kind, args, chars):
+        try:
+            text, note = fn()
+        except Exception as exc:
+            text, note = "", str(exc)
+        tried.append(source)
+        if note:
+            last_note = note
+        if text and not _is_junk(text, kind):
+            return {**base, "source": source, "chars": len(text), "content": text[:chars], "note": ""}
 
-        if kind == "html":
-            if md_mode:
-                md = collect.read_tab_markdown(url, limit=chars)
-                return {**base, "source": "markdown", "chars": len(md), "content": md,
-                        "note": "" if md else "No DOM content (Allow JavaScript from Apple Events off?)."}
-            source, content = "cache", tab.get("snippet", "")
-            if args.live or not content:
-                live = collect.read_tab_content(url, limit=chars)
-                if live:
-                    source, content = "live", live
-            content = content[:chars]
-            return {**base, "source": source, "chars": len(content), "content": content}
+    # floor 1 — screenshot → vision (reads anything rendered)
+    shot = _screenshot_payload(tab, kind, args)
+    if shot.get("shots"):
+        shot["tried"] = tried
+        return shot
 
-    # figma / pdf / office, or --shot on anything → screenshot catch-all
-    return _screenshot_payload(tab, kind, args)
+    # floor 2 — nothing worked; say exactly why + the one fix
+    note = last_note or {
+        "html": "No readable content. Enable Chrome → View → Developer → 'Allow JavaScript from Apple Events'.",
+    }.get(kind, "Couldn't read this tab.")
+    if shot.get("note"):
+        note = f"{note} (screenshot also failed: {shot['note']})"
+    note += " — or copy it (⌘A ⌘C) and read with --clipboard."
+    return {**base, "source": "none", "chars": 0, "content": "", "tried": tried, "note": note}
 
 
 def _format_shot_block(p: dict) -> str:
@@ -418,6 +485,20 @@ def cmd_shot(args) -> None:
         return
     print(f"# {tab['title']} — {len(shots)} screenshot(s)\n{tab['url']}\n\n"
           "Read these image files to see the tab:\n" + "\n".join(shots))
+
+
+def cmd_grab(args) -> None:
+    """Read the macOS clipboard — the human-assisted rung. You copy (⌘A ⌘C in
+    the tab, no focus race), I grab it. The reliable floor when in-page reads
+    can't get clean content (e.g. a stubborn Office editor)."""
+    clip = collect.read_clipboard()
+    if args.json:
+        print(json.dumps({"chars": len(clip), "content": clip}, ensure_ascii=False))
+        return
+    if not clip.strip():
+        print("Clipboard is empty — copy the content first (⌘A then ⌘C), then run this.")
+        return
+    print(clip)
 
 
 def cmd_grep(args) -> None:
@@ -822,6 +903,10 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--json", action="store_true")
     sv.set_defaults(func=cmd_save)
 
+    sgrab = sub.add_parser("grab", help="read the clipboard (you copy, I grab) — the reliable read floor")
+    sgrab.add_argument("--json", action="store_true")
+    sgrab.set_defaults(func=cmd_grab)
+
     sb = sub.add_parser("bundles", help="list saved research bundles")
     sb.add_argument("--json", action="store_true")
     sb.set_defaults(func=cmd_bundles)
@@ -840,6 +925,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="convert the page to Markdown (headings/lists/links/tables) — best for text-heavy HTML")
     sr.add_argument("--shot", action="store_true",
                     help="screenshot the tab instead of reading text (the agent reads it with vision)")
+    sr.add_argument("--clipboard", action="store_true",
+                    help="read the macOS clipboard (you copy with ⌘A ⌘C, I grab it) instead of the tab")
     sr.add_argument("--full", action="store_true",
                     help="with --shot/figma/pdf: scroll and capture the whole page, not just the viewport")
     sr.add_argument("--chars", type=int, default=None,

@@ -130,8 +130,13 @@ function toolReadTab(a) {
   if (a.md) args.push('--md');
   if (a.shot) args.push('--shot');
   if (a.full) args.push('--full');
+  if (a.clipboard) args.push('--clipboard');
   if (a.chars != null) args.push('--chars', String(a.chars));
   return readPayloadsToContent(asArray(runTab(args, { json: true })));
+}
+
+function toolGrab() {
+  return [{ type: 'text', text: runTab(['grab']) }];
 }
 
 function toolScreenshotTab(a) {
@@ -247,8 +252,17 @@ const TOOLS = [
       md: { type: 'boolean', description: 'Return Markdown (headings/lists/links/tables) — best for text-heavy HTML.' },
       shot: { type: 'boolean', description: 'Screenshot the tab instead of reading text (returns images).' },
       full: { type: 'boolean', description: 'With a screenshot: scroll and capture the whole page.' },
+      clipboard: { type: 'boolean', description: 'Read the macOS clipboard instead — the user copies (⌘A ⌘C), you grab it. The reliable floor when in-page reads fail.' },
       chars: { type: 'number', description: 'Max characters of text per tab.' },
     }, required: ['ref'] },
+  },
+  {
+    name: 'grab_clipboard',
+    description:
+      'Read the macOS clipboard — the human-assisted read rung. When an in-page read can\'t get clean content ' +
+      '(a stubborn editor, a format that won\'t extract), have the user copy it (⌘A then ⌘C — no focus race) and ' +
+      'call this to grab it. Returns whatever they copied.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'screenshot_tab',
@@ -301,6 +315,7 @@ const TOOLS = [
 const HANDLERS = {
   list_tabs: toolListTabs, find_tab: toolFindTab, grep_tabs: toolGrepTabs, ask_tabs: toolAskTabs,
   save_tabs: toolSaveTabs, list_bundles: toolListBundles, recall_bundle: toolRecallBundle,
+  grab_clipboard: toolGrab,
   read_tab: toolReadTab, screenshot_tab: toolScreenshotTab, active_tab: toolActiveTab,
   open_tab: toolOpenTab, close_tab: toolCloseTab, note_tab: toolNoteTab,
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,

@@ -32,6 +32,8 @@ looking at."
     tab read t29 t30 t4      # several tabs at once
     tab read t49 --live      # fresh full page, main content (nav stripped)
     tab read t49 --md        # convert the page to Markdown (headings/lists/links/tables)
+    tab read t49 --clipboard # read what YOU copied (⌘A ⌘C) — the reliable floor
+    tab grab                 # same: read the clipboard
     tab shot t49 [--full]    # screenshot the tab → PNG path(s) the agent reads with vision
     tab active               # the frontmost tab ("what I'm looking at")
     tab open / close / note / group / pin / refresh
@@ -47,14 +49,17 @@ carries a `kind`:
 | Tab | How it's read |
 |-----|---------------|
 | **HTML** page | main-content text (readability) |
-| **Google Doc / Sheet / Slides** | the authenticated **export** (txt / CSV / txt), pulled fresh past your login via an in-tab request |
-| **Figma** | **screenshot** → read with vision (also returns `file_key`/`node_id` for the Figma MCP if you want structured design data) |
-| **PDF** | **screenshot** → read with vision; works for authenticated/internal PDFs (`--full` for multi-page) |
-| **Office / SharePoint** | **screenshot** → read with vision |
+| **Google Doc / Sheet / Slides** | authenticated **export, Markdown-first** (Doc → md, Sheet → md table), past your login |
+| **Office Word (SharePoint)** | the real **`.docx` → Markdown** (downloaded + unzipped past the login — headings/lists preserved) |
+| **Figma** | **screenshot** → vision (also returns `file_key`/`node_id` for the Figma MCP) |
+| **PDF / Office Excel·PPT** | **screenshot** → vision; works for authenticated/internal files (`--full` multi-page) |
 
-Anything with no DOM text (Figma/PDF/Office) — or any tab with `read --shot` —
-is captured as image(s) the agent reads with vision (`tab shot <ref>`, `--full`
-to scroll the whole page). Needs macOS Screen Recording permission (one-time).
+`read` is a **cascade**: it tries the best text route for the content
+(Markdown-first), falls through when a route returns nothing or just the
+editor's chrome, then to a **screenshot** (vision), then to a precise `note` —
+never a silent blank. `source` reports which route won. As a reliable floor,
+**copy anything (⌘A ⌘C) and `tab read <ref> --clipboard`** (or `tab grab`) — you
+copy, Handle reads `pbpaste`. Screenshots need macOS Screen Recording (one-time).
 
 When content comes back empty, the payload's `note` says exactly why (export
 blocked, not signed in, JavaScript-from-Apple-Events off, …).

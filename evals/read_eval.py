@@ -107,30 +107,32 @@ if by_kind.get("gdoc"):
 else:
     skip("gdoc", "none open")
 
-# Google Sheet — same contract
+# The cascade contract: a read returns TEXT, or a screenshot, or a precise
+# note — never a silent blank. (A kind can resolve any of these ways now:
+# Sheets export, or fall through to a screenshot if export is disabled.)
+def _resolved(p):
+    return p["chars"] > 0 or (p.get("source") == "screenshot" and bool(p.get("shots"))) or bool(p.get("note"))
+
+
 if by_kind.get("gsheet"):
     t = by_kind["gsheet"][0]
     p = read(t)
-    ok("gsheet · export or precise note",
-       p["kind"] == "gsheet" and (p["chars"] > 0 or bool(p.get("note"))),
-       f"{t['id']} {p['chars']}c note={(p.get('note') or '')[:46]}")
+    ok("gsheet · text / screenshot / note",
+       p["kind"] == "gsheet" and _resolved(p),
+       f"{t['id']} src={p['source']} {p['chars']}c note={(p.get('note') or '')[:40]}")
 else:
     skip("gsheet", "none open")
 
-# Figma / PDF / Office route to the screenshot catch-all: read() must return
-# source=screenshot with PNG path(s), OR (no Screen Recording permission) a
-# clear note. Figma additionally carries file_key for the MCP option.
+# Office Word resolves to docx text; Figma/PDF/Office-other to a screenshot;
+# any of them may end in a clear note. Figma also carries file_key for the MCP.
 def check_visual(kind):
     if not by_kind.get(kind):
         skip(kind, "none open")
         return
     t = by_kind[kind][0]
     p = read(t)
-    captured = p.get("source") == "screenshot" and bool(p.get("shots"))
-    graceful = bool(p.get("note"))
-    detail = f"{t['id']} shots={len(p.get('shots') or [])} note={(p.get('note') or '')[:36]}"
-    ok(f"{kind} · screenshot or clear note",
-       p["kind"] == kind and (captured or graceful), detail)
+    detail = f"{t['id']} src={p['source']} {p['chars']}c shots={len(p.get('shots') or [])} note={(p.get('note') or '')[:30]}"
+    ok(f"{kind} · text / screenshot / note", p["kind"] == kind and _resolved(p), detail)
     if kind == "figma":
         ok("figma · also exposes file_key for the MCP",
            bool(p.get("file_key")), str(p.get("file_key")))

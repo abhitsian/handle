@@ -551,11 +551,41 @@ def read_office_docx(url: str, limit: int = 40000) -> str:
         xml = z.read("word/document.xml").decode("utf-8", "replace")
     except Exception:
         return ""
-    xml = re.sub(r"</w:p>", "\n", xml)
-    xml = re.sub(r"<w:tab[^>]*/>", "\t", xml)
-    text = _html.unescape(re.sub(r"<[^>]+>", "", xml))
-    text = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", text).strip()
-    return text[:limit]
+    return _docx_xml_to_md(xml)[:limit]
+
+
+def _docx_xml_to_md(xml: str) -> str:
+    """Word document.xml → Markdown: heading styles become #, list items become
+    -, paragraphs are kept; text comes from the <w:t> runs (the proper way)."""
+    out = []
+    for p in re.findall(r"<w:p\b.*?</w:p>", xml, re.S):
+        runs = re.findall(r"<w:t[^>]*>(.*?)</w:t>", p, re.S)
+        txt = _html.unescape("".join(runs)).strip()
+        if not txt:
+            out.append("")
+            continue
+        style = re.search(r'<w:pStyle\s+w:val="([^"]+)"', p)
+        sval = style.group(1) if style else ""
+        h = re.match(r"Heading\s?([1-6])", sval)
+        if h:
+            out.append("\n" + "#" * int(h.group(1)) + " " + txt)
+        elif sval == "Title":
+            out.append("\n# " + txt)
+        elif "<w:numPr" in p:
+            out.append("- " + txt)
+        else:
+            out.append(txt)
+    md = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+    return md.strip()
+
+
+def read_clipboard() -> str:
+    """The macOS clipboard (pbpaste) — the human-assisted read rung: the user
+    copies (no focus race, any app), the agent grabs it."""
+    try:
+        return subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return ""
 
 
 if __name__ == "__main__":
