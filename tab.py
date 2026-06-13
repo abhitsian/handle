@@ -11,8 +11,10 @@ Designed to be driven from a Claude Code session. Output is compact and
 greppable; pass --json to any command for machine-readable output.
 
     tab list                 # every open tab, with handles + groups + stale
-    tab find figma           # resolve a fuzzy query to handle(s)
-    tab read t7              # live rendered text of that tab (past logins)
+    tab find figma           # resolve a fuzzy query to handle(s) by title/url
+    tab grep "fable"         # search the on-page content of every tab
+    tab read t7              # page text of that tab (cached; --live for full)
+    tab read t29 t30 t4      # read several tabs at once
     tab show t7 t3           # full detail for specific tabs
     tab active               # the frontmost tab ("what I'm looking at")
     tab open t7              # bring that tab to the front
@@ -76,6 +78,7 @@ def load_tabs(refresh: bool = False) -> list[dict]:
             "group": tab.get("user_cluster") or guess.get("cluster", ""),
             "summary": guess.get("deduction", ""),
             "note": tab.get("user_note", ""),
+            "snippet": tab.get("snippet", ""),
             "window": tab.get("window", 0),
             "pinned": pinned,
             "age_days": round(age, 1) if age is not None else None,
@@ -152,6 +155,10 @@ def resolve(ref: str, tabs: list[dict]) -> list[dict]:
 def resolve_one(ref: str, tabs: list[dict]) -> dict | None:
     """Resolve to exactly one tab; on ambiguity print the candidates and exit."""
     hits = resolve(ref, tabs)
+    # `active` can point at a tab opened since the last collect — re-scan once
+    # so "read active" / "open active" work first-try on a fresh frontmost tab.
+    if not hits and ref.strip().lower() == "active":
+        hits = resolve(ref, load_tabs(refresh=True))
     if not hits:
         print(f"No tab matches {ref!r}. Try `tab list` or `tab find <term>`.")
         sys.exit(1)
@@ -222,24 +229,88 @@ def cmd_find(args) -> None:
     print("\n".join(_line(t) for t in hits))
 
 
+def _read_one(tab: dict, args) -> dict:
+    """Return a read payload for one tab.
+
+    Fast path (default): the snippet captured at collect time — instant, no
+    Chrome round-trip. Falls back to a live JS read if the cache is empty, or
+    always reads live when --live is set (full page, freshly rendered).
+    """
+    source, content = "cache", tab.get("snippet", "")
+    if args.live or not content:
+        live = collect.read_tab_content(tab["url"], limit=args.chars)
+        if live:
+            source, content = "live", live
+        elif content:
+            source = "cache"  # keep the cached snippet we already had
+    content = content[:args.chars]
+    return {
+        "id": tab["id"], "title": tab["title"], "url": tab["url"],
+        "source": source, "chars": len(content), "content": content,
+    }
+
+
 def cmd_read(args) -> None:
     tabs = load_tabs()
-    tab = resolve_one(args.ref, tabs)
-    content = collect.read_tab_content(tab["url"], limit=args.chars)
-    payload = {
-        "id": tab["id"], "title": tab["title"], "url": tab["url"],
-        "chars": len(content), "content": content,
-    }
+    picked = [resolve_one(ref, tabs) for ref in args.refs]
+    payloads = [_read_one(t, args) for t in picked]
+
     if args.json:
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        out = payloads[0] if len(payloads) == 1 else payloads
+        print(json.dumps(out, indent=2, ensure_ascii=False))
         return
-    if not content:
-        print(f"{tab['id']} {tab['title']}\n{tab['url']}\n\n"
-              "(No content. Enable Chrome → View → Developer → "
-              "'Allow JavaScript from Apple Events', or the tab may be a "
-              "PDF/viewer. For a public page, fall back to WebFetch.)")
+
+    blocks = []
+    for p in payloads:
+        if not p["content"]:
+            blocks.append(
+                f"# {p['id']}  {p['title']}\n{p['url']}\n\n"
+                "(No content. Enable Chrome → View → Developer → "
+                "'Allow JavaScript from Apple Events', or the tab may be a "
+                "PDF/viewer. For a public page, fall back to WebFetch.)")
+        else:
+            tag = "" if p["source"] == "live" else "  ·  cached (use --live for full page)"
+            blocks.append(f"# {p['title']}{tag}\n{p['url']}\n\n{p['content']}")
+    print("\n\n———\n\n".join(blocks))
+
+
+def cmd_grep(args) -> None:
+    """Search the cached content of every open tab for a term.
+
+    Finds tabs by what's *on the page*, not just the title — "which tab
+    mentions Fable pricing". Shows a short excerpt around each match.
+    """
+    tabs = load_tabs()
+    term = args.query.lower()
+    hits = []
+    for t in tabs:
+        hay = f"{t['title']}\n{t['snippet']}".lower()
+        pos = hay.find(term)
+        if pos < 0:
+            continue
+        start = max(0, pos - 60)
+        excerpt = t["snippet"] or t["title"]
+        # locate the term within the original-case snippet for a readable excerpt
+        snip_low = t["snippet"].lower()
+        sp = snip_low.find(term)
+        if sp >= 0:
+            a = max(0, sp - 60)
+            excerpt = ("…" if a > 0 else "") + t["snippet"][a:sp + len(term) + 80].strip() + "…"
+        hits.append({**t, "excerpt": excerpt})
+
+    if args.json:
+        print(json.dumps(
+            [{"id": h["id"], "title": h["title"], "url": h["url"], "excerpt": h["excerpt"]}
+             for h in hits], indent=2, ensure_ascii=False))
         return
-    print(f"# {tab['title']}\n{tab['url']}\n\n{content}")
+    if not hits:
+        print(f"No open tab's content mentions {args.query!r}. "
+              "(Cached snippets only — run `tab refresh` to re-scan, "
+              "or the page may not have been captured.)")
+        return
+    print(f"{len(hits)} tab(s) mention {args.query!r}:\n")
+    for h in hits:
+        print(f"{h['id']:>4}  {h['title'][:70]}\n        {h['excerpt']}\n        {h['url']}")
 
 
 def cmd_show(args) -> None:
@@ -346,14 +417,21 @@ def build_parser() -> argparse.ArgumentParser:
     sl.add_argument("--json", action="store_true")
     sl.set_defaults(func=cmd_list)
 
-    sf = sub.add_parser("find", help="resolve a fuzzy query to handle(s)")
+    sf = sub.add_parser("find", help="resolve a fuzzy query to handle(s) by title/url")
     sf.add_argument("query")
     sf.add_argument("--json", action="store_true")
     sf.set_defaults(func=cmd_find)
 
-    sr = sub.add_parser("read", help="live rendered text of a tab (past logins)")
-    sr.add_argument("ref")
-    sr.add_argument("--chars", type=int, default=8000, help="max characters")
+    sgr = sub.add_parser("grep", help="search the on-page content of all tabs")
+    sgr.add_argument("query")
+    sgr.add_argument("--json", action="store_true")
+    sgr.set_defaults(func=cmd_grep)
+
+    sr = sub.add_parser("read", help="page text of one or more tabs (cached; --live for full)")
+    sr.add_argument("refs", nargs="+", help="one or more tab references")
+    sr.add_argument("--live", action="store_true",
+                    help="read the live rendered page now instead of the cached snippet")
+    sr.add_argument("--chars", type=int, default=8000, help="max characters per tab")
     sr.add_argument("--json", action="store_true")
     sr.set_defaults(func=cmd_read)
 

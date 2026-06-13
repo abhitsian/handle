@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Tab Tasks — an on-demand board over your open Chrome tabs.
+"""Handle — give every open Chrome tab a referenceable handle, on a board.
 
-Pulls your current Chrome tabs when you ask, shows them grouped into the
+Pulls your current Chrome tabs when you ask, assigns each a stable handle
+(t1, t2…) you can reference from Claude Code, shows them grouped into the
 tasks they belong to (deduced by Claude Code), lets you annotate, pin, move,
 group, and close tabs, and lets you queue actions (summarize, push to Notion,
 ingest, synthesize a cluster) that Claude Code then executes. Group the board
-by task or by browser window.
+by task or by browser window. The `tab` CLI + /tabs skill drive it from a
+session; the headline is `read`, which pulls a tab's live content past logins.
 
 Pure Python standard library — no dependencies, no install step.
 """
@@ -21,6 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 import collect as collector
+import workspaces
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
@@ -28,6 +31,16 @@ DEDUCTIONS_PATH = APP_DIR / "deductions.json"
 ACTIONS_PATH = APP_DIR / "actions.json"
 STALE_DAYS = 3
 PORT = 4910
+
+# Group-by modes that group tabs by a per-tab field (window is special-cased).
+GROUP_MODES = ("task", "initiative", "workstream", "window")
+GROUP_FIELD = {"task": "cluster", "initiative": "initiative",
+               "workstream": "workstream"}
+# Which deductions.json map holds the summary/stale for each grouping mode.
+SUMMARY_KEY = {"task": "clusters", "initiative": "initiatives",
+               "workstream": "workstreams"}
+EMPTY_LABEL = {"task": "Unsorted", "initiative": "No initiative",
+               "workstream": "No workstream", "window": "Unsorted"}
 
 ACTION_LABELS = {
     "summarize": "Summarize",
@@ -42,6 +55,11 @@ ACTION_LABELS = {
 # --------------------------------------------------------------------------
 def esc(value) -> str:
     return html.escape("" if value is None else str(value))
+
+
+def _pretty(slug: str) -> str:
+    """Human label for a slug, e.g. org-chart-conversations -> Org Chart Conversations."""
+    return slug.replace("-", " ").replace("_", " ").title() if slug else slug
 
 
 def _domain(url: str) -> str:
@@ -88,8 +106,10 @@ def build_view() -> dict:
     ded_tabs = ded.get("tabs", {})
     ded_clusters = ded.get("clusters", {})
     group_by = state.get("group_by", "task")
-    if group_by not in ("task", "window"):
+    if group_by not in GROUP_MODES:
         group_by = "task"
+    # summary/stale source for the active grouping (task/initiative/workstream)
+    summaries = ded.get(SUMMARY_KEY.get(group_by, "clusters"), {})
     now = time.time()
 
     tab_actions: dict = {}
@@ -107,6 +127,11 @@ def build_view() -> dict:
     for url, tab in state.get("tabs", {}).items():
         guess = ded_tabs.get(url, {})
         pinned = bool(tab.get("pinned"))
+        # user overrides: None (key absent) = use deduced; "" = explicit none.
+        ui = tab.get("user_initiative")
+        uw = tab.get("user_workstream")
+        initiative = ui if ui is not None else guess.get("initiative", "")
+        workstream = uw if uw is not None else guess.get("workstream", "")
         last_visit = tab.get("last_visit")
         if last_visit:
             age = (now - last_visit) / 86400
@@ -114,12 +139,18 @@ def build_view() -> dict:
             seen = _parse_iso(tab.get("first_seen"))
             age = (now - seen) / 86400 if seen else 0.0
         items.append({
+            "id": tab.get("id", ""),
             "url": url,
             "title": tab.get("title") or url,
             "domain": _domain(url),
             "user_note": tab.get("user_note", ""),
             "deduction": guess.get("deduction", ""),
             "cluster": tab.get("user_cluster") or guess.get("cluster", ""),
+            "initiative": initiative,
+            "workstream": workstream,
+            "init_override": ui is not None,
+            "ws_override": uw is not None,
+            "scope": guess.get("scope", ""),
             "window": tab.get("window", 0),
             "index": tab.get("index", 0),
             "pinned": pinned,
@@ -135,6 +166,7 @@ def build_view() -> dict:
 
     sections: list = []
     unsorted: list = []
+    active_inits = workspaces.active_initiatives()
 
     if group_by == "window":
         windows: dict = {}
@@ -145,30 +177,32 @@ def build_view() -> dict:
             tabs.sort(key=lambda x: (not x["pinned"], x["index"]))
             non_pinned = [t for t in tabs if not t["pinned"]]
             sections.append({
-                "name": f"Window {win}",
-                "summary": "",
-                "stale": _stale_section(non_pinned),
-                "count": len(tabs),
-                "tabs": tabs,
-                "actions": [],
+                "name": f"Window {win}", "key": str(win), "summary": "",
+                "stale": _stale_section(non_pinned), "count": len(tabs),
+                "tabs": tabs, "actions": [], "parkable": False,
             })
     else:
+        field = GROUP_FIELD[group_by]
         groups: dict = {}
         for it in items:
-            groups.setdefault(it["cluster"], []).append(it)
-        for name, tabs in groups.items():
+            groups.setdefault(it[field], []).append(it)
+        for key, tabs in groups.items():
             tabs.sort(key=lambda x: (not x["pinned"], -x["age_days"]))
-            if not name:
+            if not key:
                 unsorted = tabs
                 continue
             non_pinned = [t for t in tabs if not t["pinned"]]
+            # in task mode the key IS the display name; for initiative/workstream
+            # the key is a slug, so prettify for display.
+            name = key if group_by == "task" else _pretty(key)
             sections.append({
-                "name": name,
-                "summary": ded_clusters.get(name, {}).get("summary", ""),
-                "stale": _stale_section(non_pinned),
-                "count": len(tabs),
-                "tabs": tabs,
-                "actions": cluster_actions.get(name, []),
+                "name": name, "key": key,
+                "summary": summaries.get(key, {}).get("summary", ""),
+                "stale": summaries.get(key, {}).get(
+                    "stale", _stale_section(non_pinned)),
+                "count": len(tabs), "tabs": tabs,
+                "actions": cluster_actions.get(key, []) if group_by == "task" else [],
+                "parkable": group_by == "initiative" and key in active_inits,
             })
         sections.sort(key=lambda s: (not s["stale"], -s["count"]))
 
@@ -178,10 +212,14 @@ def build_view() -> dict:
         "last_collected_h": _humanize(_parse_iso(state.get("last_collected"))),
         "sections": sections,
         "unsorted": unsorted,
+        "unsorted_label": EMPTY_LABEL.get(group_by, "Unsorted"),
         "all_clusters": all_clusters,
+        "active_inits": active_inits,
+        "all_workstreams": workspaces.all_workstreams(),
         "total": len(items),
         "needs_deduction": len([it for it in items if not it["cluster"]]),
         "pending_actions": pending_actions,
+        "parked": workspaces.list_parked(),
     }
 
 
@@ -193,7 +231,7 @@ HEAD = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tab Tasks</title>
+<title>Handle</title>
 <style>
   :root {
     --bg:#f6f5f2; --card:#fff; --line:#e7e4dd; --ink:#2c2a26;
@@ -243,9 +281,15 @@ HEAD = """<!doctype html>
   .fav { width:18px; height:18px; border-radius:4px; margin-top:2px;
          flex:none; background:#edeae3; }
   .tab-main { flex:1; min-width:0; }
+  .tab-titlerow { display:flex; align-items:baseline; gap:7px; }
   .tab-title { font-size:14px; font-weight:500; color:var(--ink);
                text-decoration:none; word-break:break-word; }
   .tab-title:hover { text-decoration:underline; }
+  /* Stable handle — the same tN you reference from Claude Code (`read t49`). */
+  .handle { flex:0 0 auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+            font-size:11px; font-weight:600; color:var(--mut);
+            background:var(--card,#f1f1ef); border:1px solid var(--line,#e2e2dd);
+            border-radius:5px; padding:1px 5px; cursor:default; }
   .meta { color:var(--mut); font-size:12px; margin-top:3px; }
   .idle { color:var(--amber); font-weight:600; }
   .chip { font-size:11px; font-weight:600; background:#f0ead9; color:var(--amber);
@@ -320,6 +364,13 @@ document.querySelectorAll('.move').forEach(function (sel) {
     }
   });
 });
+document.querySelectorAll('.retag').forEach(function (sel) {
+  sel.addEventListener('change', function () {
+    post('/api/retag', {
+      url: sel.dataset.url, field: sel.dataset.field, value: sel.value
+    });
+  });
+});
 document.querySelectorAll('.act').forEach(function (sel) {
   sel.addEventListener('change', function () {
     if (!sel.value) return;
@@ -344,6 +395,21 @@ document.querySelectorAll('.toggle button').forEach(function (el) {
     post('/api/groupby', { mode: el.dataset.mode });
   });
 });
+document.querySelectorAll('.act-btn.park').forEach(function (el) {
+  el.addEventListener('click', function () {
+    var n = el.dataset.initiative;
+    if (!confirm('Park "' + n + '"? Its tabs get snapshotted to the initiative '
+                 + 'folder and closed in Chrome. Resume reopens them.')) return;
+    el.disabled = true;
+    post('/api/park', { initiative: n });
+  });
+});
+document.querySelectorAll('.act-btn.resume').forEach(function (el) {
+  el.addEventListener('click', function () {
+    el.disabled = true;
+    post('/api/resume', { initiative: el.dataset.initiative });
+  });
+});
 </script>
 </body>
 </html>
@@ -359,6 +425,27 @@ def _move_select(t: dict, all_clusters: list) -> str:
         opts.append(f'<option value="{esc(name)}"{sel}>{esc(name)}</option>')
     opts.append('<option value="__new__">+ New group&hellip;</option>')
     return (f'<select class="move" data-url="{esc(t["url"])}">'
+            + "".join(opts) + "</select>")
+
+
+def _retag_select(t: dict, field: str, current: str, overridden: bool,
+                  options: list) -> str:
+    """A dropdown to correct a tab's initiative/workstream tag.
+
+    "auto" clears the override (back to the deduced tag); "none" pins it to no
+    tag. A real option pins it to that slug. The current value is preselected.
+    """
+    auto_sel = "" if overridden else " selected"
+    none_sel = " selected" if (overridden and not current) else ""
+    opts = [
+        f'<option value="__auto__"{auto_sel}>&#9881; auto</option>',
+        f'<option value=""{none_sel}>&mdash; none &mdash;</option>',
+    ]
+    for slug in options:
+        sel = " selected" if (current == slug) else ""
+        opts.append(f'<option value="{esc(slug)}"{sel}>{esc(_pretty(slug))}</option>')
+    return (f'<select class="retag" data-url="{esc(t["url"])}" '
+            f'data-field="{field}" title="Re-tag {field}">'
             + "".join(opts) + "</select>")
 
 
@@ -390,7 +477,11 @@ def _action_chip(a: dict) -> str:
             f'&#10003; {esc(label)}</span>')
 
 
-def render_tab(t: dict, all_clusters: list, show_move: bool = True) -> str:
+def render_tab(t: dict, all_clusters: list, group_by: str = "task",
+               active_inits: list | None = None,
+               all_ws: list | None = None) -> str:
+    handle = (f'<span class="handle" title="Reference this tab in Claude Code: '
+              f'read {t["id"]}">{esc(t["id"])}</span> ' if t.get("id") else "")
     meta = (f'{esc(t["domain"])} &middot; window {t["window"]} &middot; '
             f'last opened {esc(t["last_visit_h"])}')
     if t["pinned"]:
@@ -411,8 +502,17 @@ def render_tab(t: dict, all_clusters: list, show_move: bool = True) -> str:
             chips.append(_action_chip(a))
     chips_html = f'<div class="achips">{"".join(chips)}</div>' if chips else ""
 
-    move = _move_select(t, all_clusters) if show_move else ""
-    actions_row = f'<div class="tab-actions">{move}{_action_select(t)}</div>'
+    if group_by == "task":
+        retag = _move_select(t, all_clusters)
+    elif group_by == "initiative":
+        retag = _retag_select(t, "initiative", t["initiative"],
+                              t.get("init_override", False), active_inits or [])
+    elif group_by == "workstream":
+        retag = _retag_select(t, "workstream", t["workstream"],
+                              t.get("ws_override", False), all_ws or [])
+    else:
+        retag = ""
+    actions_row = f'<div class="tab-actions">{retag}{_action_select(t)}</div>'
 
     pin_cls = "iconbtn pin on" if t["pinned"] else "iconbtn pin"
     pin_title = "Unpin" if t["pinned"] else "Pin to top of this group"
@@ -421,8 +521,9 @@ def render_tab(t: dict, all_clusters: list, show_move: bool = True) -> str:
         '<img class="fav" alt="" referrerpolicy="no-referrer" '
         f'src="https://www.google.com/s2/favicons?sz=32&domain={esc(t["domain"])}">'
         '<div class="tab-main">'
+        f'<div class="tab-titlerow">{handle}'
         f'<a class="tab-title" href="{esc(t["url"])}" target="_blank" '
-        f'rel="noopener">{esc(t["title"])}</a>'
+        f'rel="noopener">{esc(t["title"])}</a></div>'
         f'<div class="meta">{meta}</div>{ded}{summary_block}'
         f'<textarea class="note" data-url="{esc(t["url"])}" '
         'placeholder="Add a note &mdash; what were you doing here?">'
@@ -436,8 +537,9 @@ def render_tab(t: dict, all_clusters: list, show_move: bool = True) -> str:
     )
 
 
-def _render_section(s: dict, all_clusters: list, show_move: bool,
-                    cluster_actions: bool) -> str:
+def _render_section(s: dict, all_clusters: list, group_by: str,
+                    cluster_actions: bool, active_inits: list | None = None,
+                    all_ws: list | None = None) -> str:
     stale = " stale" if s["stale"] else ""
     pill = '<span class="pill stale">stale</span>' if s["stale"] else ""
     summary = f'<p class="cl-sum">{esc(s["summary"])}</p>' if s["summary"] else ""
@@ -455,13 +557,26 @@ def _render_section(s: dict, all_clusters: list, show_move: bool,
         )
         chips = "".join(_action_chip(a) for a in s.get("actions", []))
         actions_row = f'<div class="cl-actions">{buttons}{chips}</div>'
+    park_row = ""
+    if s.get("parkable"):
+        cnt = s["count"]
+        park_row = (
+            '<div class="cl-actions">'
+            f'<button class="act-btn park" data-initiative="{esc(s["key"])}" '
+            f'title="Snapshot these {cnt} tabs to the initiative folder and '
+            f'close them in Chrome">&#9208; Park initiative</button></div>'
+        )
+    cnt = s["count"]
     head = (
         f'<section class="cluster{stale}"><div class="cl-head{stale}">'
         f'<p class="cl-title">{esc(s["name"])} {pill}'
         f'<span class="pill">{cnt} tab{"" if cnt == 1 else "s"}</span></p>'
-        f'{summary}{actions_row}</div>'
+        f'{summary}{actions_row}{park_row}</div>'
     )
-    body = "".join(render_tab(t, all_clusters, show_move) for t in s["tabs"])
+    body = "".join(
+        render_tab(t, all_clusters, group_by, active_inits, all_ws)
+        for t in s["tabs"]
+    )
     return head + body + "</section>"
 
 
@@ -469,18 +584,38 @@ def render_page(v: dict, error: str | None = None) -> str:
     out = [HEAD, '<div class="wrap">']
     total = v["total"]
     collected = esc(v["last_collected_h"]) if v["last_collected"] else "not yet"
-    by_task = v["group_by"] == "task"
+    mode = v["group_by"]
+    by_task = mode == "task"
+
+    def _tog(m, label):
+        return (f'<button data-mode="{m}" class="{"on" if mode == m else ""}">'
+                f'{label}</button>')
+
     out.append(
-        '<header><div><h1>Tab Tasks</h1>'
+        '<header><div><h1>Handle</h1>'
         f'<p class="sub">{total} open tab{"" if total == 1 else "s"} '
         f'&middot; collected {collected}</p></div>'
         '<div class="head-right"><div class="toggle">'
-        f'<button data-mode="task" class="{"on" if by_task else ""}">Task</button>'
-        f'<button data-mode="window" class="{"" if by_task else "on"}">Window</button>'
-        '</div><form method="post" action="/api/refresh">'
+        + _tog("task", "Task") + _tog("initiative", "Initiative")
+        + _tog("workstream", "Workstream") + _tog("window", "Window")
+        + '</div><form method="post" action="/api/refresh">'
         '<button class="btn" type="submit">&#8635; Refresh</button>'
         '</form></div></header>'
     )
+    parked = v.get("parked", {})
+    if parked:
+        chips = "".join(
+            f'<button class="act-btn resume" data-initiative="{esc(slug)}" '
+            f'title="Reopen {rec.get("count", 0)} parked tabs in Chrome">'
+            f'&#9654; {esc(_pretty(slug))} '
+            f'<span class="pill">{rec.get("count", 0)}</span></button>'
+            for slug, rec in sorted(parked.items())
+        )
+        out.append(
+            '<div class="banner info"><b>Parked initiatives.</b> '
+            f'Resume to reopen the tab set:<div class="cl-actions" '
+            f'style="margin-top:8px">{chips}</div></div>'
+        )
     if error:
         out.append(
             '<div class="banner err"><b>Couldn&rsquo;t read Chrome.</b> '
@@ -507,15 +642,20 @@ def render_page(v: dict, error: str | None = None) -> str:
             '<div class="empty">No tabs collected yet.<br>'
             'Click <b>Refresh</b> to pull your open Chrome tabs.</div>'
         )
+    ai, aw = v.get("active_inits", []), v.get("all_workstreams", [])
     for s in v["sections"]:
-        out.append(_render_section(s, v["all_clusters"], show_move=by_task,
-                                   cluster_actions=by_task))
+        out.append(_render_section(s, v["all_clusters"], group_by=mode,
+                                   cluster_actions=by_task,
+                                   active_inits=ai, all_ws=aw))
     if v["unsorted"]:
-        out.append('<h2 class="section">Unsorted</h2>')
+        label = v.get("unsorted_label", "Unsorted")
+        out.append(f'<h2 class="section">{esc(label)}</h2>')
         out.append(_render_section(
-            {"name": "Unsorted", "summary": "", "stale": False,
-             "count": len(v["unsorted"]), "tabs": v["unsorted"], "actions": []},
-            v["all_clusters"], show_move=by_task, cluster_actions=False,
+            {"name": label, "key": "", "summary": "", "stale": False,
+             "count": len(v["unsorted"]), "tabs": v["unsorted"],
+             "actions": [], "parkable": False},
+            v["all_clusters"], group_by=mode, cluster_actions=False,
+            active_inits=ai, all_ws=aw,
         ))
     out.append('</div>')
     out.append(SCRIPT)
@@ -596,10 +736,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/groupby":
             mode = data.get("mode")
-            if mode in ("task", "window"):
+            if mode in GROUP_MODES:
                 state = collector.load_json(STATE_PATH, {"tabs": {}})
                 state["group_by"] = mode
                 collector.write_json(STATE_PATH, state)
+            self._ok()
+            return
+        if parsed.path == "/api/park":
+            self._park(data.get("initiative", ""))
+            return
+        if parsed.path == "/api/resume":
+            slug = data.get("initiative", "")
+            urls = workspaces.resume(slug)
+            if urls:
+                collector.open_urls(urls)
             self._ok()
             return
 
@@ -622,6 +772,17 @@ class Handler(BaseHTTPRequestHandler):
                 tabs[url]["user_cluster"] = (data.get("cluster") or "").strip()
                 collector.write_json(STATE_PATH, state)
             self._ok()
+        elif parsed.path == "/api/retag":
+            field = data.get("field")
+            if url in tabs and field in ("initiative", "workstream"):
+                key = "user_" + field
+                value = data.get("value")
+                if value == "__auto__":
+                    tabs[url].pop(key, None)          # clear override -> deduced
+                else:
+                    tabs[url][key] = (value or "").strip()
+                collector.write_json(STATE_PATH, state)
+            self._ok()
         elif parsed.path == "/api/close":
             collector.close_tab(url)
             if url in tabs:
@@ -630,6 +791,31 @@ class Handler(BaseHTTPRequestHandler):
             self._ok()
         else:
             self._send(404, "not found", "text/plain; charset=utf-8")
+
+    def _park(self, slug: str):
+        """Snapshot an initiative's tabs to its folder, then close them."""
+        if not slug:
+            self._ok()
+            return
+        ded = collector.load_json(DEDUCTIONS_PATH, {"tabs": {}})
+        ded_tabs = ded.get("tabs", {})
+        state = collector.load_json(STATE_PATH, {"tabs": {}})
+        tabs = state.get("tabs", {})
+        targets = [
+            {"url": url, "title": tab.get("title", "")}
+            for url, tab in tabs.items()
+            if ded_tabs.get(url, {}).get("initiative") == slug
+            and not tab.get("pinned")
+        ]
+        if not targets:
+            self._ok()
+            return
+        workspaces.park(slug, targets)
+        for t in targets:
+            collector.close_tab(t["url"])
+            tabs.pop(t["url"], None)
+        collector.write_json(STATE_PATH, state)
+        self._ok()
 
     def _queue_action(self, data: dict):
         action = data.get("action")
@@ -663,5 +849,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Tab Tasks  →  http://127.0.0.1:{PORT}")
+    print(f"Handle  →  http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

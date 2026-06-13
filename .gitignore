@@ -4,3 +4,4 @@ deductions.json
 __pycache__/
 *.pyc
 .DS_Store
+workspaces.json

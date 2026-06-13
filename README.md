@@ -1,12 +1,33 @@
-# Tab Tasks
+# Handle
 
-An on-demand board over your open Chrome tabs. Pull your current tabs whenever
-you want, see them grouped into the tasks they belong to, pin the ones that
-matter, move tabs between groups, close tabs you're done with, and spot the
-tasks that have gone **stale** — so you remember what you started and never
-came back to.
+Give every open Chrome tab a **stable handle** (`t1`, `t2`…) you can reference
+from a Claude Code session — then read its live content, search across what's
+open, and act on it. There's also a board: see tabs grouped into the tasks they
+belong to, pin the ones that matter, and spot the ones that have gone **stale**.
 
-## What you can do
+The same handle (`t49`) names the tab on the board and in your session.
+
+## From Claude Code
+
+The `tab` CLI (`tab.py`) is the agent surface; the `/tabs` skill drives it from
+any session, so you can just say "summarize the figma tab" or "what am I
+looking at."
+
+    tab list                 # every open tab: handle · group · staleness
+    tab find figma           # resolve a fuzzy query to handle(s) by title/url
+    tab grep "fable"         # search the on-page content of every tab
+    tab read t49             # page text — cached & instant
+    tab read t29 t30 t4      # several tabs at once
+    tab read t49 --live      # fresh full page, main content (nav stripped)
+    tab active               # the frontmost tab ("what I'm looking at")
+    tab open / close / note / group / pin / refresh
+
+`read` is the headline: it pulls a tab's **live, logged-in** content via Chrome
+— past auth walls and JS shells that defeat a plain fetch. Default is the
+cached snapshot (instant); `--live` reads the full page fresh and extracts the
+main article, dropping nav/footer chrome.
+
+## What the board does
 
 - **Refresh** — reads every open Chrome tab via AppleScript, plus when you last
   visited each URL (from Chrome's own history database).
@@ -51,7 +72,7 @@ No dependencies — it runs on the Python standard library alone.
 
 ## The deduce loop
 
-Tab Tasks does not call any AI API itself. When you want your tabs sorted:
+Handle does not call any AI API itself. When you want your tabs sorted:
 
 1. Refresh the board (or run `python3 collect.py`).
 2. In Claude Code, say **`deduce my tabs`**.

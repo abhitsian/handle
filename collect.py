@@ -128,7 +128,7 @@ def collect() -> dict:
 
     Per-tab notes, statuses, and first-seen timestamps are preserved across
     refreshes. Tabs closed in Chrome are dropped — closing a tab is how you
-    tell Tab Tasks you're done with it.
+    tell Handle you're done with it.
     """
     state = load_json(STATE_PATH, {})
     if not isinstance(state, dict):
@@ -286,12 +286,36 @@ def focus_tab(url: str) -> bool:
     return proc.returncode == 0 and "ok" in proc.stdout
 
 
+# JS that prefers the main article/content element so reads skip nav, header,
+# and footer chrome; falls back to the whole body. Single-quoted inside so it
+# embeds in the AppleScript double-quoted string without escaping.
+# Readability-lite: score every <p> and credit its parent, then take the
+# element that holds the most paragraph text — that's the article body, not
+# the nav-heavy ancestors. Falls back to article/main/body for pages without
+# paragraph structure (docs, sheets). No DOM cloning — returning the chosen
+# element's innerText directly keeps it cheap even on huge editor DOMs (a
+# cloneNode(true) of a Google Sheet body hangs the per-tab scan).
+# Single-quoted throughout so it embeds in the AppleScript double-quoted string.
+MAIN_CONTENT_JS = (
+    "(function(){"
+    "var ps=document.querySelectorAll('p'),s=new Map();"
+    "for(var i=0;i<ps.length;i++){var p=ps[i];var t=(p.textContent||'').trim();"
+    "if(t.length<25)continue;var pa=p.parentElement;if(!pa)continue;"
+    "s.set(pa,(s.get(pa)||0)+Math.min(t.length,1000)/100+1);}"
+    "var best=null,bs=0;s.forEach(function(v,k){if(v>bs){bs=v;best=k;}});"
+    "var r=best||document.querySelector('article')||document.querySelector('main')||document.body;"
+    "return r?r.innerText:'';"
+    "})()"
+)
+
+
 def read_tab_content(url: str, limit: int = 8000) -> str:
     """Read the rendered text of an open tab via Chrome JS execution.
 
-    Returns "" if the tab isn't found or Chrome's "Allow JavaScript from
-    Apple Events" setting is off. For public pages, callers can fall back
-    to fetching the URL instead.
+    Extracts the page's main content (article/main) rather than the whole
+    body, so navigation and footer chrome are dropped. Returns "" if the tab
+    isn't found or Chrome's "Allow JavaScript from Apple Events" setting is
+    off. For public pages, callers can fall back to fetching the URL instead.
     """
     safe = url.replace("\\", "\\\\").replace('"', '\\"')
     lines = [
@@ -299,8 +323,7 @@ def read_tab_content(url: str, limit: int = 8000) -> str:
         '  repeat with w in windows',
         '    repeat with t in tabs of w',
         f'      if (URL of t) is "{safe}" then',
-        '        return execute t javascript '
-        '"(document.body ? document.body.innerText : \\"\\")"',
+        f'        return execute t javascript "{MAIN_CONTENT_JS}"',
         '      end if',
         '    end repeat',
         '  end repeat',

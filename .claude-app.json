@@ -1,8 +1,8 @@
 {
-  "name": "Tab Tasks",
+  "name": "Handle",
   "type": "python",
   "entry": "app.py",
   "port": 4910,
   "open": "http://localhost:4910",
-  "description": "Reads your open Chrome tabs on demand, groups them into the tasks you're working on, and flags ones that have gone stale so you remember what's unfinished. Pure stdlib — no dependencies."
+  "description": "Gives every open Chrome tab a stable handle (t1, t2…) you can reference and read from Claude Code — pull a tab's live content past login walls, grep across what's open, group stale tabs on a board. Pure stdlib — no dependencies."
 }

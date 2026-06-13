@@ -24,8 +24,15 @@ tell application "Google Chrome"
 			try
 				set theTitle to (title of t) as text
 			end try
+			-- Cheap, bounded snippet: a plain body-text grab capped per tab by
+			-- `with timeout`, so one slow or hung tab (heavy editor DOM, a tab
+			-- blocked on a JS dialog) can't stall the whole scan. The richer
+			-- readability extraction runs only on the on-demand `read --live`
+			-- path, where it's one tab at a time.
 			try
-				set snippet to ((execute t javascript "(document.body?document.body.innerText:'').substring(0,4000)") as text)
+				with timeout of 4 seconds
+					set snippet to ((execute t javascript "(document.body?document.body.innerText:'').substring(0,4000)") as text)
+				end timeout
 			end try
 			set output to output & winIndex & fieldSep & tabIndex & fieldSep & theURL & fieldSep & theTitle & fieldSep & snippet & recordSep
 		end repeat
