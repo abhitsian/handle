@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Handle — give your agent a handle on every open tab</title>
+<meta property="og:title" content="Handle — give your agent a handle on every open tab">
+<meta property="og:description" content="Every open Chrome tab gets a stable handle your Claude Code session can reference and read — pull a tab's live content past login walls, grep across what's open, act on it. Your browser becomes context your agent can see.">
+<meta name="theme-color" content="#0a0f14">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1620'/%3E%3Crect x='6' y='9' width='20' height='15' rx='3' fill='none' stroke='%234fe0b0' stroke-width='1.6'/%3E%3Crect x='9' y='6' width='9' height='6' rx='2' fill='%234fe0b0'/%3E%3Ctext x='16' y='20.5' font-family='monospace' font-size='8' fill='%234fe0b0' text-anchor='middle' font-weight='700'%3Et7%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0a0f14; --bg-2:#0e1620; --panel:#11191f; --panel-2:#172430;
+    --line:#1f2c36; --ink:#e8edf0; --ink-soft:#94a3ad; --ink-faint:#65737d;
+    --mint:#4fe0b0; --mint-soft:#86f0d0; --amber:#f4b860; --amber-soft:#ffce86;
+    --violet:#9d8bff; --ok:#4fe0b0;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    background:
+      radial-gradient(920px 620px at 82% -12%, #103027 0%, transparent 60%),
+      radial-gradient(720px 520px at -5% 102%, #11202c 0%, transparent 65%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+    background-attachment:fixed;
+    color:var(--ink); font-family:"Space Grotesk",system-ui,sans-serif;
+    min-height:100vh; padding:clamp(26px,4vw,52px) clamp(20px,5vw,56px) 56px;
+    -webkit-font-smoothing:antialiased; line-height:1.5;
+  }
+  .page { max-width:1080px; margin:0 auto; }
+  a { color:var(--mint); text-decoration:none; }
+  a:hover { color:var(--mint-soft); }
+  code { font-family:"JetBrains Mono",monospace; font-size:.9em; color:var(--mint-soft); }
+
+  /* ---- TOP BAR ---- */
+  .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:clamp(40px,6vw,72px); }
+  .brand { display:flex; align-items:center; gap:13px; }
+  .brand .mark {
+    width:42px; height:42px; border-radius:10px; flex-shrink:0;
+    background:linear-gradient(180deg,#16242e,#0e1822); border:1px solid var(--line);
+    display:flex; align-items:center; justify-content:center; box-shadow:0 2px 14px rgba(0,0,0,.4);
+  }
+  .brand .mark span { font-family:"JetBrains Mono",monospace; font-weight:700; font-size:15px; color:var(--mint); }
+  .brand-name { font-weight:700; font-size:17px; letter-spacing:-0.01em; }
+  .brand-tag { color:var(--mint); font-size:12.5px; font-weight:500; letter-spacing:.2px; margin-top:1px; }
+  .top-cta { display:flex; gap:10px; }
+  .top-cta a { font-family:"JetBrains Mono",monospace; font-size:12.5px; padding:8px 14px;
+    border:1px solid var(--line); border-radius:7px; color:var(--ink-soft); transition:.15s; }
+  .top-cta a:hover { border-color:var(--mint); color:var(--mint); }
+
+  /* ---- HERO ---- */
+  .hero { display:grid; grid-template-columns:1fr auto; gap:clamp(36px,5vw,72px); align-items:center; margin-bottom:clamp(48px,7vw,84px); }
+  @media (max-width:780px) { .hero { grid-template-columns:1fr; gap:40px; } .scene { order:-1; } }
+
+  .eyebrow { color:var(--mint); font-family:"JetBrains Mono",monospace; font-size:12px;
+    letter-spacing:.12em; text-transform:uppercase; font-weight:600; }
+  .headline { font-size:clamp(33px,5vw,52px); font-weight:700; line-height:1.05; letter-spacing:-0.032em; margin-top:14px; }
+  .headline .accent { color:var(--mint); }
+  .lede { color:var(--ink-soft); font-size:clamp(15px,1.5vw,17px); margin-top:18px; max-width:40em; }
+  .lede b { color:var(--ink); font-weight:500; }
+  .cta-row { display:flex; gap:14px; margin-top:28px; flex-wrap:wrap; }
+  .btn { font-family:"Space Grotesk",sans-serif; font-size:14.5px; font-weight:600; padding:12px 22px;
+    border-radius:9px; transition:.15s; display:inline-flex; align-items:center; gap:8px; cursor:pointer; border:none; }
+  .btn-primary { background:var(--mint); color:#06140e; }
+  .btn-primary:hover { background:var(--mint-soft); transform:translateY(-1px); }
+  .btn-ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  .btn-ghost:hover { border-color:var(--mint); color:var(--mint); }
+
+  /* ---- HERO SCENE: tabs → handle → agent ---- */
+  .scene { width:clamp(300px,38vw,400px); flex-shrink:0; }
+  .browser {
+    background:linear-gradient(180deg,#101b23,#0c151c); border:1px solid var(--line);
+    border-radius:13px; padding:0 0 14px; position:relative; overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,.45);
+  }
+  .bbar { display:flex; align-items:center; gap:6px; padding:11px 14px; border-bottom:1px solid var(--line); }
+  .bbar .dot { width:9px; height:9px; border-radius:50%; background:#2a3a45; }
+  .bbar .url { margin-left:10px; flex:1; height:16px; border-radius:5px; background:#172430;
+    display:flex; align-items:center; padding:0 9px; font-family:"JetBrains Mono",monospace;
+    font-size:9.5px; color:var(--ink-faint); }
+  .tabs { padding:14px 14px 4px; position:relative; }
+  .tab {
+    display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px;
+    margin-bottom:8px; background:#0f1a22; border:1px solid #182530; position:relative;
+    animation:tabWake 9s ease-in-out infinite; animation-delay:var(--d,0s);
+  }
+  .tab .chip {
+    font-family:"JetBrains Mono",monospace; font-weight:700; font-size:11px; color:var(--mint);
+    background:#0c1b18; border:1px solid #1d3b33; border-radius:5px; padding:2px 6px; flex-shrink:0;
+    transition:.3s;
+  }
+  .tab .lines { flex:1; display:flex; flex-direction:column; gap:4px; }
+  .tab .ln { height:5px; border-radius:3px; background:#21323d; }
+  .tab .ln.short { width:55%; }
+  .tab .fav { width:14px; height:14px; border-radius:4px; background:linear-gradient(135deg,#1d3b33,#16242e); flex-shrink:0; }
+  /* the tab the beam is "reading" lights up */
+  @keyframes tabWake {
+    0%,100% { background:#0f1a22; border-color:#182530; }
+    var(--peak), 8% { } /* placeholder */
+  }
+  .tab.live { animation:tabLive 9s ease-in-out infinite; animation-delay:var(--d,0s); }
+  @keyframes tabLive {
+    0%, 92%, 100% { background:#0f1a22; border-color:#182530; box-shadow:none; }
+    4%, 12% { background:#0e201b; border-color:#2c5247; box-shadow:0 0 0 1px rgba(79,224,176,.25), 0 4px 18px rgba(79,224,176,.12); }
+  }
+  .tab.live .chip { animation:chipGlow 9s ease-in-out infinite; animation-delay:var(--d,0s); }
+  @keyframes chipGlow {
+    0%, 92%, 100% { color:var(--mint); box-shadow:none; }
+    4%, 12% { color:#06140e; background:var(--mint); border-color:var(--mint); box-shadow:0 0 14px rgba(79,224,176,.6); }
+  }
+  /* scan beam sweeping down the tab list */
+  .beam {
+    position:absolute; left:8px; right:8px; height:30px; border-radius:8px; top:8px;
+    background:linear-gradient(180deg, rgba(79,224,176,0), rgba(79,224,176,.16), rgba(79,224,176,0));
+    box-shadow:0 0 18px rgba(79,224,176,.25); pointer-events:none;
+    animation:beam 9s cubic-bezier(.7,0,.3,1) infinite;
+  }
+  @keyframes beam {
+    0% { transform:translateY(0); opacity:0; }
+    6% { opacity:1; } 40% { opacity:1; }
+    46%,100% { transform:translateY(190px); opacity:0; }
+  }
+  /* flow from browser to agent */
+  .pipe { position:relative; height:46px; margin:2px 0 -4px; }
+  .pipe .track { position:absolute; left:50%; top:0; bottom:0; width:2px; transform:translateX(-50%);
+    background:linear-gradient(180deg, rgba(79,224,176,.4), rgba(79,224,176,.08)); }
+  .pipe .packet { position:absolute; left:50%; top:0; width:9px; height:9px; border-radius:50%;
+    transform:translate(-50%,-50%); background:var(--mint); box-shadow:0 0 12px var(--mint);
+    animation:packet 9s cubic-bezier(.5,0,.4,1) infinite; }
+  @keyframes packet { 0%,42% { top:0; opacity:0; } 48% { opacity:1; } 70% { top:100%; opacity:1; } 78%,100% { top:100%; opacity:0; } }
+  .agent {
+    background:linear-gradient(180deg,#0c1a14,#0a1610); border:1px solid #1d3b33; border-radius:11px;
+    padding:14px 16px; font-family:"JetBrains Mono",monospace; box-shadow:0 0 0 1px rgba(79,224,176,.06);
+  }
+  .agent .who { font-size:10.5px; color:var(--mint); letter-spacing:.08em; text-transform:uppercase; margin-bottom:7px; }
+  .agent .line { font-size:11.5px; color:var(--ink-soft); }
+  .agent .line .pr { color:var(--mint); }
+  .agent .cursor { display:inline-block; width:7px; height:13px; background:var(--mint); vertical-align:-2px;
+    margin-left:2px; animation:blink 1.1s step-end infinite; }
+  @keyframes blink { 0%,50% { opacity:1; } 50.01%,100% { opacity:0; } }
+
+  /* ---- FEATURE GRID ---- */
+  .features { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:18px; margin-top:30px; }
+  .feature { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:23px 22px; transition:.18s; }
+  .feature:hover { border-color:var(--mint); transform:translateY(-2px); }
+  .feature h3 { font-size:16px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; gap:10px; }
+  .feature h3 .ic { width:30px; height:30px; background:var(--panel-2); border-radius:7px;
+    display:inline-flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
+  .feature p { color:var(--ink-soft); font-size:13.5px; line-height:1.6; }
+
+  /* ---- SECTIONS ---- */
+  .section { margin-top:clamp(60px,9vw,104px); }
+  .section h2 { font-size:clamp(24px,3vw,30px); font-weight:700; letter-spacing:-0.02em; margin-bottom:8px; }
+  .section .sub { color:var(--ink-soft); font-size:14.5px; max-width:42em; }
+
+  /* reveal-on-scroll */
+  .reveal { opacity:0; transform:translateY(18px); transition:opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity:1; transform:none; }
+
+  /* ---- THE LOOP (steps) ---- */
+  .loop { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:28px; }
+  @media (max-width:720px){ .loop { grid-template-columns:1fr; } }
+  .lstep { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; position:relative; }
+  .lstep .k { font-family:"JetBrains Mono",monospace; font-size:12px; color:var(--amber); }
+  .lstep h4 { font-size:15px; margin:8px 0 7px; }
+  .lstep p { color:var(--ink-soft); font-size:13px; line-height:1.55; }
+
+  /* ---- CODE ---- */
+  pre { font-family:"JetBrains Mono",monospace; font-size:12.5px; line-height:1.7; background:#070d11;
+    border:1px solid var(--line); border-radius:9px; padding:16px 16px; color:var(--ink); overflow-x:auto;
+    position:relative; margin-top:22px; }
+  pre .c { color:var(--ink-faint); }
+  pre .cmd { color:var(--mint-soft); }
+  pre .h { color:var(--amber); }
+  .copy { position:absolute; top:9px; right:9px; background:var(--panel-2); border:1px solid var(--line);
+    color:var(--ink-soft); font-size:11px; padding:4px 8px; border-radius:5px; cursor:pointer; font-family:"Space Grotesk",sans-serif; }
+  .copy:hover { color:var(--mint); border-color:var(--mint); }
+
+  /* ---- COMPARISON TABLE ---- */
+  .cmp { margin-top:26px; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .cmp table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  .cmp th, .cmp td { padding:13px 14px; text-align:left; border-bottom:1px solid var(--line); }
+  .cmp thead th { background:var(--panel-2); font-weight:600; font-size:12.5px; }
+  .cmp thead th.us { color:var(--mint); }
+  .cmp td:first-child { color:var(--ink-soft); }
+  .cmp tbody tr:last-child td { border-bottom:none; }
+  .cmp .y { color:var(--mint); font-weight:600; }
+  .cmp .n { color:var(--ink-faint); }
+  .cmp .p { color:var(--amber); }
+  .cmp col.us-col, .cmp .us { background:rgba(79,224,176,.05); }
+  @media (max-width:680px){ .cmp { overflow-x:auto; } .cmp table { min-width:560px; } }
+
+  /* ---- INSTALL ---- */
+  .install-grid { display:grid; gap:14px; margin-top:24px; }
+  .install-step { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 22px;
+    display:grid; grid-template-columns:32px 1fr; gap:16px; align-items:start; }
+  .install-step .n { background:var(--panel-2); color:var(--mint); width:28px; height:28px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-family:"JetBrains Mono",monospace; font-weight:700; font-size:13px; }
+  .install-step h4 { font-size:14.5px; font-weight:600; margin-bottom:6px; }
+  .install-step p { color:var(--ink-soft); font-size:13px; line-height:1.55; }
+  .install-step pre { margin-top:6px; }
+
+  /* ---- FOOTER ---- */
+  .footer { margin-top:clamp(70px,10vw,116px); padding-top:28px; border-top:1px solid var(--line);
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; color:var(--ink-faint); font-size:13px; }
+  .footer a { color:var(--ink-soft); }
+  .footer a:hover { color:var(--mint); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark"><span>t·</span></div>
+      <div>
+        <div class="brand-name">Handle</div>
+        <div class="brand-tag">give your agent a handle on every open tab</div>
+      </div>
+    </div>
+    <div class="top-cta">
+      <a href="https://github.com/abhitsian/handle" target="_blank" rel="noopener">GitHub →</a>
+      <a href="#install">Use it</a>
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-text">
+      <div class="eyebrow">macOS · Chrome · open source</div>
+      <h1 class="headline">Your browser is context. Give your <span class="accent">agent</span> a handle on it.</h1>
+      <p class="lede">When you work in Claude Code, the tabs you have open <b>are</b> the task — the spec, the Figma, the Notion page, the docs you're logged into. Your agent can't see any of it. Handle gives every open Chrome tab a <b>stable handle</b> (<code>t1</code>, <code>t2</code>…) your session can reference, and a <code>read</code> that pulls the tab's <b>live, logged-in content</b> straight into the conversation — past the login walls and JavaScript that defeat a plain fetch.</p>
+      <div class="cta-row">
+        <a href="#install" class="btn btn-primary">Use it ↓</a>
+        <a href="https://github.com/abhitsian/handle" target="_blank" rel="noopener" class="btn btn-ghost">View on GitHub →</a>
+      </div>
+    </div>
+
+    <!-- animated scene: tabs scanned → handle → agent reads -->
+    <div class="scene" aria-hidden="true">
+      <div class="browser">
+        <div class="bbar"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <div class="url">chrome · 5 tabs open</div></div>
+        <div class="tabs">
+          <div class="beam"></div>
+          <div class="tab live" style="--d:0s"><span class="fav"></span><span class="chip">t1</span><div class="lines"><div class="ln"></div><div class="ln short"></div></div></div>
+          <div class="tab live" style="--d:1.8s"><span class="fav"></span><span class="chip">t2</span><div class="lines"><div class="ln"></div><div class="ln short"></div></div></div>
+          <div class="tab live" style="--d:3.6s"><span class="fav"></span><span class="chip">t3</span><div class="lines"><div class="ln"></div><div class="ln short"></div></div></div>
+          <div class="tab live" style="--d:5.4s"><span class="fav"></span><span class="chip">t4</span><div class="lines"><div class="ln"></div><div class="ln short"></div></div></div>
+          <div class="tab live" style="--d:7.2s"><span class="fav"></span><span class="chip">t5</span><div class="lines"><div class="ln"></div><div class="ln short"></div></div></div>
+        </div>
+      </div>
+      <div class="pipe"><div class="track"></div><div class="packet"></div></div>
+      <div class="agent">
+        <div class="who">▍claude code</div>
+        <div class="line"><span class="pr">&gt;</span> read the figma tab</div>
+        <div class="line" style="color:var(--mint)">→ tab read t3 · 412 chars<span class="cursor"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- THE GAP -->
+  <section class="section reveal">
+    <h2>The agent is blind to your browser</h2>
+    <p class="sub">Every browser tool for Claude Code drives a browser the agent controls — its own session, logged out, expensive to read. None of them treat the real, logged-in tabs <em>you</em> curated as something the agent can simply reference and read. That's the gap Handle fills.</p>
+    <div class="cmp">
+      <table>
+        <thead>
+          <tr><th></th><th class="us">Handle</th><th>WebFetch</th><th>Playwright MCP</th><th>Claude in Chrome</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Reads your real, logged-in tabs</td><td class="us y">✓</td><td class="n">✗ logged out</td><td class="n">✗ own browser</td><td class="y">✓</td></tr>
+          <tr><td>Gets through login walls &amp; JS shells</td><td class="us y">✓</td><td class="n">✗</td><td class="p">~ heavy</td><td class="y">✓</td></tr>
+          <tr><td>Low token cost</td><td class="us y">✓ just the text</td><td class="y">✓</td><td class="n">✗ 50k-token trees</td><td class="p">~</td></tr>
+          <tr><td>Reference a tab by a stable handle</td><td class="us y">✓ t1, t2…</td><td class="n">—</td><td class="n">✗</td><td class="n">✗</td></tr>
+          <tr><td>No automation session to spin up</td><td class="us y">✓ read-only</td><td class="y">✓</td><td class="n">✗</td><td class="n">✗</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- WHAT IT DOES -->
+  <section class="section reveal">
+    <h2>What it does</h2>
+    <p class="sub">A small CLI (<code>tab</code>) and a <code>/tabs</code> skill let your session reference, read, and act on the tabs you already have open — by number, by name, or by "what I'm looking at."</p>
+    <div class="features">
+      <div class="feature">
+        <h3><span class="ic">🔖</span> Stable handles</h3>
+        <p>Every open tab gets a short handle — <code>t1</code>, <code>t2</code> — that survives refreshes. Say "read t7" or "summarize the figma tab" instead of copy-pasting a long URL. The same handle names the tab on the board and in your session.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">📖</span> Read past the login wall</h3>
+        <p>The headline. <code>read</code> pulls a tab's live, rendered text from your already-authenticated browser — the logged-in SharePoint doc, the Figma page, the gated newsletter — and extracts the main article, dropping nav and footer chrome.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">🔍</span> Grep what's open</h3>
+        <p>Search the actual on-page content of every tab, not just titles. "Which tab mentions the pricing change?" returns the handles, with excerpts. Find by what you read, not what you remember calling it.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">📑</span> Pull a cluster in one call</h3>
+        <p>Hand several tabs to one <code>read t29 t30 t4</code> and the whole working set lands in context at once — the three articles, the spec, and the competitor page, ready to synthesize.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">👁️</span> "What am I looking at?"</h3>
+        <p><code>read active</code> grabs the frontmost tab — the page on your screen right now — so you can ask about it without naming it. The agent sees what you see.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">🗂️</span> A board, too</h3>
+        <p>A local board clusters your tabs into the tasks they belong to, flags the ones gone stale (untouched 3+ days), and shows each tab's handle — so you remember what you started and can hand any of it to the agent.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- THE LOOP -->
+  <section class="section reveal">
+    <h2>How it works</h2>
+    <p class="sub">Handle calls no AI API of its own. It reads your real Chrome locally; your Claude Code session does the thinking. One shared file of handles is all the board and the agent need.</p>
+    <div class="loop">
+      <div class="lstep"><div class="k">01 · reference</div><h4>Name the tab</h4><p>You point at a tab the way you'd say it out loud — "the figma tab," "tab 7," "what I'm looking at." Handle resolves it to a stable handle.</p></div>
+      <div class="lstep"><div class="k">02 · read</div><h4>Pull the content</h4><p>It runs JavaScript inside that live tab to extract the rendered text — logged in, past the wall — for a few hundred tokens. Cached by default; <code>--live</code> for a fresh full page.</p></div>
+      <div class="lstep"><div class="k">03 · act</div><h4>Work with it</h4><p>The text is in the conversation. Summarize it, turn it into a task, compare it across tabs, ingest it — whatever the session's skills and tools can do.</p></div>
+    </div>
+    <pre><button class="copy" onclick="copyCode(this)">copy</button><code><span class="c"># in any Claude Code session — say it in plain English, or run tab directly</span>
+<span class="cmd">tab list</span>                  <span class="c"># every open tab: handle · group · staleness</span>
+<span class="cmd">tab grep</span> <span class="h">"fable pricing"</span>     <span class="c"># search the on-page content of every tab</span>
+<span class="cmd">tab read active</span>           <span class="c"># the tab you're looking at, right now</span>
+<span class="cmd">tab read t3</span>                <span class="c"># cached &amp; instant</span>
+<span class="cmd">tab read t29 t30 t4</span>        <span class="c"># a whole cluster in one call</span>
+<span class="cmd">tab read t3 --live</span>         <span class="c"># fresh full page, nav stripped</span></code></pre>
+  </section>
+
+  <!-- INSTALL -->
+  <section class="section reveal" id="install">
+    <h2>Use it</h2>
+    <p class="sub">macOS + Google Chrome. Pure Python standard library — no dependencies, no API key. The agent side runs through your existing Claude Code session.</p>
+    <div class="install-grid">
+      <div class="install-step">
+        <span class="n">1</span>
+        <div>
+          <h4>Clone it</h4>
+          <pre><button class="copy" onclick="copyCode(this)">copy</button><code>git clone https://github.com/abhitsian/handle.git ~/claude-apps/handle</code></pre>
+        </div>
+      </div>
+      <div class="install-step">
+        <span class="n">2</span>
+        <div>
+          <h4>Let Chrome read its own pages</h4>
+          <p>Enable <b>Chrome → View → Developer → Allow JavaScript from Apple Events</b>. This is what lets <code>read</code> pull a tab's live, logged-in content. First run also asks for Automation permission — allow it.</p>
+        </div>
+      </div>
+      <div class="install-step">
+        <span class="n">3</span>
+        <div>
+          <h4>Reference your tabs from Claude Code</h4>
+          <p>Drop the <code>/tabs</code> skill in <code>~/.claude/skills/</code> (included) and just talk: <i>"what am I looking at?"</i>, <i>"summarize the figma tab,"</i> <i>"which tab mentions the migration?"</i> Or call the CLI yourself with <code>python3 tab.py …</code></p>
+        </div>
+      </div>
+      <div class="install-step">
+        <span class="n">4</span>
+        <div>
+          <h4>Open the board (optional)</h4>
+          <pre><button class="copy" onclick="copyCode(this)">copy</button><code>cd ~/claude-apps/handle && python3 app.py
+<span class="c"># → http://localhost:4910</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div>MIT · built by <a href="https://github.com/abhitsian" target="_blank" rel="noopener">@abhitsian</a></div>
+    <div><a href="https://github.com/abhitsian/handle" target="_blank" rel="noopener">github.com/abhitsian/handle ↗</a></div>
+  </footer>
+
+</div>
+
+<script>
+  function copyCode(btn) {
+    const code = btn.parentElement.querySelector('code').innerText;
+    navigator.clipboard.writeText(code).then(() => {
+      const old = btn.innerText; btn.innerText = 'copied';
+      setTimeout(() => btn.innerText = old, 1300);
+    });
+  }
+  // reveal sections on scroll
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>
