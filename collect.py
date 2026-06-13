@@ -134,6 +134,8 @@ def collect() -> dict:
     if not isinstance(state, dict):
         state = {}
     previous = state.get("tabs", {})
+    next_id = state.get("next_id", 1)
+    used_ids = {t.get("id") for t in previous.values() if isinstance(t, dict)}
 
     chrome_tabs = read_chrome_tabs()
     visits = chrome_history_visits([t["url"] for t in chrome_tabs])
@@ -143,7 +145,15 @@ def collect() -> dict:
     for t in chrome_tabs:
         url = t["url"]
         prev = previous.get(url, {})
+        # Stable handle: a tab keeps its `tN` id across refreshes so Claude
+        # Code (and the board) can reference it by a short name, not a URL.
+        tab_id = prev.get("id")
+        if not tab_id:
+            tab_id = f"t{next_id}"
+            next_id += 1
+            used_ids.add(tab_id)
         tabs[url] = {
+            "id": tab_id,
             "url": url,
             "title": t["title"],
             "snippet": t["snippet"] or prev.get("snippet", ""),
@@ -156,9 +166,14 @@ def collect() -> dict:
             "user_cluster": prev.get("user_cluster", ""),
             "pinned": prev.get("pinned", False),
         }
+        # carry initiative/workstream overrides only when set; absence = auto
+        for key in ("user_initiative", "user_workstream"):
+            if key in prev:
+                tabs[url][key] = prev[key]
 
     new_state = {
         "tabs": tabs,
+        "next_id": next_id,
         "last_collected": now,
         "last_deduced": state.get("last_deduced"),
         "group_by": state.get("group_by", "task"),
@@ -176,6 +191,84 @@ def close_tab(url: str) -> bool:
         '    repeat with t in tabs of w\n'
         f'      if (URL of t) is "{safe}" then\n'
         '        close t\n'
+        '        return "ok"\n'
+        '      end if\n'
+        '    end repeat\n'
+        '  end repeat\n'
+        '  return "notfound"\n'
+        'end tell'
+    )
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0 and "ok" in proc.stdout
+
+
+def open_urls(urls: list[str]) -> int:
+    """Open each URL as a new tab in Chrome's front window. Returns count opened.
+
+    Used by workspace "resume" — reopens a parked initiative's tab set.
+    """
+    urls = [u for u in urls if u]
+    if not urls:
+        return 0
+    lines = [
+        'tell application "Google Chrome"',
+        '  if (count of windows) = 0 then make new window',
+        '  activate',
+    ]
+    for u in urls:
+        safe = u.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(
+            f'  tell window 1 to make new tab with properties {{URL:"{safe}"}}'
+        )
+    lines.append('end tell')
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", "\n".join(lines)],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:
+        return 0
+    return len(urls) if proc.returncode == 0 else 0
+
+
+def active_tab_url() -> str:
+    """Return the URL of the frontmost Chrome tab — 'the tab I'm looking at'."""
+    script = (
+        'tell application "Google Chrome"\n'
+        '  if (count of windows) = 0 then return ""\n'
+        '  return URL of active tab of front window\n'
+        'end tell'
+    )
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15,
+        )
+    except Exception:
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def focus_tab(url: str) -> bool:
+    """Bring the tab matching `url` to the front and activate Chrome."""
+    safe = url.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        'tell application "Google Chrome"\n'
+        '  repeat with w in windows\n'
+        '    set i to 0\n'
+        '    repeat with t in tabs of w\n'
+        '      set i to i + 1\n'
+        f'      if (URL of t) is "{safe}" then\n'
+        '        set active tab index of w to i\n'
+        '        set index of w to 1\n'
+        '        activate\n'
         '        return "ok"\n'
         '      end if\n'
         '    end repeat\n'

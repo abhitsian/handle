@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""tab — the Claude Code bridge to your real, logged-in Chrome.
+
+Every open tab has a stable short handle (t1, t2, …) that survives refreshes.
+Reference a tab by its handle, its number, a fuzzy title/url match, or `active`
+(the tab you're looking at right now). The headline command is `read`: it pulls
+the *live rendered text* of a tab you're already logged into — past login walls
+and JS rendering that defeat a plain fetch — for a few hundred tokens.
+
+Designed to be driven from a Claude Code session. Output is compact and
+greppable; pass --json to any command for machine-readable output.
+
+    tab list                 # every open tab, with handles + groups + stale
+    tab find figma           # resolve a fuzzy query to handle(s)
+    tab read t7              # live rendered text of that tab (past logins)
+    tab show t7 t3           # full detail for specific tabs
+    tab active               # the frontmost tab ("what I'm looking at")
+    tab open t7              # bring that tab to the front
+    tab close t7             # close it in Chrome for real
+    tab note t7 "ship this"  # attach a note (wins over Claude's guess)
+    tab group t7 "Org Chart" # move it to a group
+    tab pin t7 / unpin t7
+    tab refresh              # re-read Chrome into state.json
+
+Reference forms accepted everywhere a tab is expected:
+    t7    (handle)   ·   7   (bare number)   ·   active   ·   a fuzzy substring
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import collect
+
+APP_DIR = Path(__file__).resolve().parent
+STATE_PATH = APP_DIR / "state.json"
+DEDUCTIONS_PATH = APP_DIR / "deductions.json"
+STALE_DAYS = 3
+
+
+# --------------------------------------------------------------------------- #
+# loading + enrichment
+# --------------------------------------------------------------------------- #
+def _now_unix() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
+def load_tabs(refresh: bool = False) -> list[dict]:
+    """Return every tab as a flat, enriched record sorted by handle number.
+
+    Each record merges state.json (handle, note, pin, timestamps) with the
+    Claude-written deductions.json (group, one-line summary) and a computed
+    `stale` flag, so a single record has everything a caller needs.
+    """
+    if refresh:
+        collect.collect()
+    state = collect.load_json(STATE_PATH, {})
+    _backfill_ids(state)
+    ded = collect.load_json(DEDUCTIONS_PATH, {"tabs": {}})
+    ded_tabs = ded.get("tabs", {})
+    now = _now_unix()
+
+    out: list[dict] = []
+    for url, tab in (state.get("tabs", {}) or {}).items():
+        guess = ded_tabs.get(url, {})
+        last_visit = tab.get("last_visit")
+        age = (now - last_visit) / 86400 if last_visit else None
+        pinned = bool(tab.get("pinned"))
+        out.append({
+            "id": tab.get("id", "?"),
+            "url": url,
+            "title": tab.get("title") or url,
+            "group": tab.get("user_cluster") or guess.get("cluster", ""),
+            "summary": guess.get("deduction", ""),
+            "note": tab.get("user_note", ""),
+            "window": tab.get("window", 0),
+            "pinned": pinned,
+            "age_days": round(age, 1) if age is not None else None,
+            "stale": bool(age is not None and age >= STALE_DAYS and not pinned),
+            "last_seen": tab.get("last_seen"),
+        })
+    out.sort(key=lambda t: _id_num(t["id"]))
+    return out
+
+
+def _backfill_ids(state: dict) -> None:
+    """Assign stable handles to any tab missing one (e.g. pre-handle state).
+
+    Writes back only when something changed, so the handles persist for the
+    next refresh just as if collect() had assigned them.
+    """
+    tabs = state.get("tabs", {})
+    if not tabs:
+        return
+    next_id = state.get("next_id", 1)
+    changed = False
+    for tab in tabs.values():
+        if isinstance(tab, dict) and not tab.get("id"):
+            tab["id"] = f"t{next_id}"
+            next_id += 1
+            changed = True
+    if changed:
+        state["next_id"] = next_id
+        collect.write_json(STATE_PATH, state)
+
+
+def _id_num(handle: str) -> int:
+    try:
+        return int(str(handle).lstrip("t"))
+    except (ValueError, AttributeError):
+        return 1 << 30
+
+
+# --------------------------------------------------------------------------- #
+# reference resolution: tN | N | active | fuzzy substring
+# --------------------------------------------------------------------------- #
+def resolve(ref: str, tabs: list[dict]) -> list[dict]:
+    """Resolve one reference string to matching tab record(s).
+
+    Exact handle / number / `active` return at most one; a fuzzy term returns
+    every tab whose title, url, group, or note contains it (case-insensitive).
+    """
+    ref = ref.strip()
+    if not ref:
+        return []
+    by_id = {t["id"]: t for t in tabs}
+
+    if ref.lower() == "active":
+        url = collect.active_tab_url()
+        return [t for t in tabs if t["url"] == url] if url else []
+
+    handle = ref if ref.startswith("t") else f"t{ref}"
+    if ref.isdigit() or (handle in by_id and ref.lstrip("t").isdigit()):
+        if handle in by_id:
+            return [by_id[handle]]
+
+    if ref in by_id:  # someone passed an exact handle like "t7"
+        return [by_id[ref]]
+
+    term = ref.lower()
+    hits = [t for t in tabs
+            if term in t["title"].lower()
+            or term in t["url"].lower()
+            or term in t["group"].lower()
+            or term in t["note"].lower()]
+    return hits
+
+
+def resolve_one(ref: str, tabs: list[dict]) -> dict | None:
+    """Resolve to exactly one tab; on ambiguity print the candidates and exit."""
+    hits = resolve(ref, tabs)
+    if not hits:
+        print(f"No tab matches {ref!r}. Try `tab list` or `tab find <term>`.")
+        sys.exit(1)
+    if len(hits) > 1:
+        print(f"{ref!r} matches {len(hits)} tabs — be specific:")
+        for t in hits:
+            print(_line(t))
+        sys.exit(1)
+    return hits[0]
+
+
+# --------------------------------------------------------------------------- #
+# formatting
+# --------------------------------------------------------------------------- #
+def _line(t: dict) -> str:
+    """One compact, greppable line per tab."""
+    flags = ""
+    if t["pinned"]:
+        flags += "📌"
+    if t["stale"]:
+        flags += "⏳"
+    group = f"[{t['group']}] " if t["group"] else ""
+    note = f"  «{t['note']}»" if t["note"] else ""
+    age = ""
+    if t["age_days"] is not None:
+        age = f"  ({t['age_days']:g}d)"
+    title = t["title"][:70]
+    return f"{t['id']:>4}  {flags:<3} {group}{title}{age}{note}\n        {t['url']}"
+
+
+def _emit(data, as_json: bool, human: str) -> None:
+    if as_json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print(human)
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+def cmd_list(args) -> None:
+    tabs = load_tabs(refresh=args.refresh)
+    if args.group:
+        tabs = [t for t in tabs if args.group.lower() in t["group"].lower()]
+    if args.stale:
+        tabs = [t for t in tabs if t["stale"]]
+    if args.window:
+        tabs = [t for t in tabs if t["window"] == args.window]
+    if args.json:
+        print(json.dumps(tabs, indent=2, ensure_ascii=False))
+        return
+    if not tabs:
+        print("No tabs. Run `tab refresh` (and make sure Chrome is open).")
+        return
+    print(f"{len(tabs)} open tab(s)  ·  📌 pinned  ⏳ stale ({STALE_DAYS}d+)\n")
+    print("\n".join(_line(t) for t in tabs))
+
+
+def cmd_find(args) -> None:
+    tabs = load_tabs()
+    hits = resolve(args.query, tabs)
+    if args.json:
+        print(json.dumps(hits, indent=2, ensure_ascii=False))
+        return
+    if not hits:
+        print(f"No tab matches {args.query!r}.")
+        return
+    print("\n".join(_line(t) for t in hits))
+
+
+def cmd_read(args) -> None:
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    content = collect.read_tab_content(tab["url"], limit=args.chars)
+    payload = {
+        "id": tab["id"], "title": tab["title"], "url": tab["url"],
+        "chars": len(content), "content": content,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    if not content:
+        print(f"{tab['id']} {tab['title']}\n{tab['url']}\n\n"
+              "(No content. Enable Chrome → View → Developer → "
+              "'Allow JavaScript from Apple Events', or the tab may be a "
+              "PDF/viewer. For a public page, fall back to WebFetch.)")
+        return
+    print(f"# {tab['title']}\n{tab['url']}\n\n{content}")
+
+
+def cmd_show(args) -> None:
+    tabs = load_tabs()
+    picked = []
+    for ref in args.refs:
+        picked.extend(resolve(ref, tabs))
+    seen, uniq = set(), []
+    for t in picked:
+        if t["id"] not in seen:
+            seen.add(t["id"])
+            uniq.append(t)
+    if args.json:
+        print(json.dumps(uniq, indent=2, ensure_ascii=False))
+        return
+    if not uniq:
+        print("No matching tabs.")
+        return
+    for t in uniq:
+        print(_line(t))
+        if t["summary"]:
+            print(f"        summary: {t['summary']}")
+        print(f"        window {t['window']}  ·  group: {t['group'] or '—'}"
+              f"  ·  last seen {t['last_seen'] or '—'}")
+
+
+def cmd_active(args) -> None:
+    tabs = load_tabs()
+    url = collect.active_tab_url()
+    hit = next((t for t in tabs if t["url"] == url), None)
+    if not hit and url:  # frontmost tab not yet in state — refresh once
+        tabs = load_tabs(refresh=True)
+        hit = next((t for t in tabs if t["url"] == url), None)
+    if args.json:
+        print(json.dumps(hit or {}, indent=2, ensure_ascii=False))
+        return
+    print(_line(hit) if hit else f"Frontmost tab: {url or '(none — is Chrome open?)'}")
+
+
+def cmd_open(args) -> None:
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    ok = collect.focus_tab(tab["url"])
+    print(f"{'Focused' if ok else 'Could not focus'} {tab['id']}  {tab['title']}")
+
+
+def cmd_close(args) -> None:
+    tabs = load_tabs()
+    for ref in args.refs:
+        tab = resolve_one(ref, tabs)
+        ok = collect.close_tab(tab["url"])
+        print(f"{'Closed' if ok else 'Could not close'} {tab['id']}  {tab['title']}")
+
+
+def _mutate_state(url: str, **fields) -> None:
+    state = collect.load_json(STATE_PATH, {})
+    tab = state.get("tabs", {}).get(url)
+    if not tab:
+        print("Tab not in state — run `tab refresh`.")
+        sys.exit(1)
+    tab.update(fields)
+    collect.write_json(STATE_PATH, state)
+
+
+def cmd_note(args) -> None:
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    _mutate_state(tab["url"], user_note=" ".join(args.text))
+    print(f"Noted {tab['id']}: {' '.join(args.text)!r}")
+
+
+def cmd_group(args) -> None:
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    _mutate_state(tab["url"], user_cluster=" ".join(args.name))
+    print(f"Moved {tab['id']} → {' '.join(args.name)!r}")
+
+
+def cmd_pin(args) -> None:
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    _mutate_state(tab["url"], pinned=(args.cmd == "pin"))
+    print(f"{'Pinned' if args.cmd == 'pin' else 'Unpinned'} {tab['id']}  {tab['title']}")
+
+
+def cmd_refresh(args) -> None:
+    state = collect.collect()
+    print(f"Refreshed — {len(state['tabs'])} open tab(s) in state.json.")
+
+
+# --------------------------------------------------------------------------- #
+# argument wiring
+# --------------------------------------------------------------------------- #
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="tab", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sl = sub.add_parser("list", help="list every open tab")
+    sl.add_argument("--group", help="only tabs whose group matches")
+    sl.add_argument("--stale", action="store_true", help="only stale tabs")
+    sl.add_argument("--window", type=int, help="only tabs in this window")
+    sl.add_argument("--refresh", action="store_true", help="re-read Chrome first")
+    sl.add_argument("--json", action="store_true")
+    sl.set_defaults(func=cmd_list)
+
+    sf = sub.add_parser("find", help="resolve a fuzzy query to handle(s)")
+    sf.add_argument("query")
+    sf.add_argument("--json", action="store_true")
+    sf.set_defaults(func=cmd_find)
+
+    sr = sub.add_parser("read", help="live rendered text of a tab (past logins)")
+    sr.add_argument("ref")
+    sr.add_argument("--chars", type=int, default=8000, help="max characters")
+    sr.add_argument("--json", action="store_true")
+    sr.set_defaults(func=cmd_read)
+
+    ss = sub.add_parser("show", help="full detail for one or more tabs")
+    ss.add_argument("refs", nargs="+")
+    ss.add_argument("--json", action="store_true")
+    ss.set_defaults(func=cmd_show)
+
+    sa = sub.add_parser("active", help="the frontmost tab")
+    sa.add_argument("--json", action="store_true")
+    sa.set_defaults(func=cmd_active)
+
+    so = sub.add_parser("open", help="bring a tab to the front")
+    so.add_argument("ref")
+    so.set_defaults(func=cmd_open)
+
+    sc = sub.add_parser("close", help="close tab(s) in Chrome")
+    sc.add_argument("refs", nargs="+")
+    sc.set_defaults(func=cmd_close)
+
+    sn = sub.add_parser("note", help="attach a note to a tab")
+    sn.add_argument("ref")
+    sn.add_argument("text", nargs="+")
+    sn.set_defaults(func=cmd_note)
+
+    sg = sub.add_parser("group", help="move a tab to a group")
+    sg.add_argument("ref")
+    sg.add_argument("name", nargs="+")
+    sg.set_defaults(func=cmd_group)
+
+    for name in ("pin", "unpin"):
+        sp = sub.add_parser(name, help=f"{name} a tab")
+        sp.add_argument("ref")
+        sp.set_defaults(func=cmd_pin)
+
+    sx = sub.add_parser("refresh", help="re-read Chrome into state.json")
+    sx.set_defaults(func=cmd_refresh)
+    return p
+
+
+def main(argv=None) -> None:
+    args = build_parser().parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
