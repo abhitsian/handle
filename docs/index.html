@@ -222,6 +222,27 @@
   .ladder b { color:var(--ink); font-size:16px; }
   .ladder .ld-d { color:var(--ink-soft); font-size:14.5px; line-height:1.55; margin-top:5px; display:block; }
 
+  /* ---- examples grid ---- */
+  .examples { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px,1fr)); gap:14px; margin-top:30px; }
+  .ex { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; }
+  .ex .q { font-family:"JetBrains Mono",monospace; font-size:15px; color:var(--ink); line-height:1.5; }
+  .ex .q .pr { color:var(--mint); }
+  .ex .r { color:var(--ink-soft); font-size:14px; margin-top:10px; line-height:1.5; }
+  .ex .r b { color:var(--mint); font-weight:500; }
+
+  /* ---- MCP tools reference ---- */
+  .tools { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px,1fr)); gap:16px; margin-top:30px; }
+  .toolgroup { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; }
+  .toolgroup h4 { font-size:13px; color:var(--mint); font-family:"JetBrains Mono",monospace; letter-spacing:.08em;
+    text-transform:uppercase; margin-bottom:14px; }
+  .toolgroup .t { display:block; padding:7px 0; border-top:1px solid var(--line); }
+  .toolgroup .t:first-of-type { border-top:none; }
+  .toolgroup .t code { font-family:"JetBrains Mono",monospace; font-size:13.5px; color:var(--ink); }
+  .toolgroup .t span { color:var(--ink-soft); font-size:13px; display:block; margin-top:2px; line-height:1.45; }
+  .tools-note { color:var(--ink-soft); font-size:14.5px; margin-top:20px; }
+  .tools-note code { font-family:"JetBrains Mono",monospace; color:var(--mint); background:var(--bg-2);
+    padding:2px 8px; border-radius:6px; font-size:13px; }
+
   /* reveal-on-scroll */
   .reveal { opacity:0; transform:translateY(18px); transition:opacity .6s ease, transform .6s ease; }
   .reveal.in { opacity:1; transform:none; }
@@ -504,6 +525,73 @@
       <li><b>A picture, read with vision</b><span class="ld-d">For designs, PDFs, or anything with no readable text, it takes a screenshot and your AI reads the image.</span></li>
       <li><b>Your clipboard</b><span class="ld-d">Last resort — you copy the page, it grabs what's on your clipboard. There's always a way through.</span></li>
     </ol>
+  </section>
+
+  <!-- EXAMPLES -->
+  <section class="section reveal">
+    <h2>Just say it — examples</h2>
+    <p class="sub">You talk to your AI in plain language; it runs the right Handle tools for you. A few things people ask:</p>
+    <div class="examples">
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> what did I work on today?</div><div class="r">Reads your history back as <b>themes</b>, not a raw list.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> pull up that Stratechery piece I read last week</div><div class="r">Finds it in your history <b>by meaning</b> → reopens it → summarizes.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> summarize the Google Doc I'm looking at</div><div class="r">Reads your <b>signed-in</b> page, past the login wall.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> answer this from the six tabs I have open</div><div class="r">Reads all six and answers <b>cited by tab</b>.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> reopen the doc I closed this morning</div><div class="r">Recovers it from the session and <b>opens it back up</b>.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> compare these three pricing pages</div><div class="r">Reads each and lays out the <b>differences</b>.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> read the PDF I just downloaded</div><div class="r">Resolves the download to the <b>local file</b> and reads it.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> what does this Figma show?</div><div class="r">Screenshots the board and <b>reads it with vision</b>.</div></div>
+      <div class="ex"><div class="q"><span class="pr">&gt;</span> what errors are on this page?</div><div class="r">Pulls the <b>console logs</b> (with the extension).</div></div>
+    </div>
+  </section>
+
+  <!-- MCP TOOLS -->
+  <section class="section reveal">
+    <h2>The tools your agent gets</h2>
+    <p class="sub">Handle exposes 25 tools over <b>MCP</b>, so any agent can use them as first-class functions. You rarely call these by name — your AI picks the right one — but here's the full surface.</p>
+    <div class="tools">
+      <div class="toolgroup">
+        <h4>Read &amp; reference</h4>
+        <span class="t"><code>read_tab</code><span>page text — HTML, Google/Office export, or screenshot, by type</span></span>
+        <span class="t"><code>active_tab</code><span>the tab you're looking at right now</span></span>
+        <span class="t"><code>find_tab</code><span>resolve "the figma one" to a tab</span></span>
+        <span class="t"><code>grep_tabs</code><span>search the on-page content of every open tab</span></span>
+        <span class="t"><code>list_tabs</code><span>every open tab, with groups + stale flags</span></span>
+        <span class="t"><code>screenshot_tab</code><span>capture a tab as image(s) to read with vision</span></span>
+        <span class="t"><code>grab_clipboard</code><span>read what you copied — the reliable floor</span></span>
+      </div>
+      <div class="toolgroup">
+        <h4>Ask &amp; keep research</h4>
+        <span class="t"><code>ask_tabs</code><span>answer a question across your open tabs, cited</span></span>
+        <span class="t"><code>save_tabs</code><span>capture tabs into a dated research bundle</span></span>
+        <span class="t"><code>recall_bundle</code><span>load a saved bundle back as context</span></span>
+        <span class="t"><code>list_bundles</code><span>list your saved research</span></span>
+      </div>
+      <div class="toolgroup">
+        <h4>Your browser's past</h4>
+        <span class="t"><code>history</code><span>query your history by meaning (+ search terms)</span></span>
+        <span class="t"><code>closed</code><span>recently-closed tabs, real titles → reopen</span></span>
+        <span class="t"><code>bookmarks</code><span>search your bookmarks</span></span>
+        <span class="t"><code>downloads</code><span>recent downloads → local file paths</span></span>
+        <span class="t"><code>journeys</code><span>Chrome's own topical clusters of your browsing</span></span>
+        <span class="t"><code>most_visited</code><span>the sites you live in</span></span>
+      </div>
+      <div class="toolgroup">
+        <h4>Act on tabs</h4>
+        <span class="t"><code>open_tab</code><span>focus a tab, or open any URL</span></span>
+        <span class="t"><code>close_tab</code><span>close tabs for real</span></span>
+        <span class="t"><code>group_tab</code><span>move a tab into a group</span></span>
+        <span class="t"><code>note_tab</code><span>attach a note to a tab</span></span>
+        <span class="t"><code>pin_tab</code><span>pin / unpin a tab</span></span>
+        <span class="t"><code>refresh_tabs</code><span>re-scan Chrome into Handle</span></span>
+      </div>
+      <div class="toolgroup">
+        <h4>Sturdier backend</h4>
+        <span class="t"><code>console</code><span>console logs + errors for a tab (via the extension)</span></span>
+        <span class="t"><code>ext_status</code><span>is the Chrome extension connected</span></span>
+        <span class="t"><code>read_tab --cdp</code><span>read via DevTools Protocol when you've opted in</span></span>
+      </div>
+    </div>
+    <p class="tools-note">Connect it in one line: <code>claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js</code></p>
   </section>
 
   <!-- SET IT UP -->
