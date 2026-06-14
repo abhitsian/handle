@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import collect as collector
 import workspaces
+import extbridge
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
@@ -707,6 +708,12 @@ class Handler(BaseHTTPRequestHandler):
             }
             self._send(200, json.dumps(payload, indent=2),
                        "application/json; charset=utf-8")
+        elif parsed.path == "/ext/status":
+            self._send(200, json.dumps(extbridge.status()), "application/json")
+        elif parsed.path == "/ext/poll":
+            # extension long-polls here for the next live command
+            cmd = extbridge.poll(wait=25.0)
+            self._send(200, json.dumps(cmd or {}), "application/json")
         else:
             self._send(404, "not found", "text/plain; charset=utf-8")
 
@@ -723,6 +730,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         data = self._json_body()
+
+        # --- Chrome extension bridge ---------------------------------------
+        if parsed.path == "/ext/sync":
+            # extension pushed the current tabs/groups → refresh state.json
+            ext_tabs = data.get("tabs", [])
+            try:
+                collector.collect_from_ext(ext_tabs)
+            except Exception:
+                pass
+            extbridge.mark_sync({"tab_count": len(ext_tabs),
+                                 "ext_version": data.get("version", "")})
+            self._ok()
+            return
+        if parsed.path == "/ext/result":
+            extbridge.deliver_result(data.get("id", ""), data.get("result", {}))
+            self._ok()
+            return
+        if parsed.path == "/ext/cmd":
+            # the CLI asks the extension to do something live
+            result = extbridge.enqueue(
+                data.get("method", ""), data.get("params", {}),
+                timeout=float(data.get("timeout", 20)))
+            self._send(200, json.dumps(result), "application/json")
+            return
 
         if parsed.path == "/api/action":
             self._queue_action(data)

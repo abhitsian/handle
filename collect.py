@@ -130,6 +130,58 @@ def chrome_history_visits(urls: list[str]) -> dict[str, float]:
     return visits
 
 
+def chrome_recent_visits(hours: float = 48.0, limit: int = 40,
+                         skip_urls: set[str] | None = None) -> list[dict]:
+    """Recently visited URLs from Chrome's History DB — titles + links only.
+
+    The pointer, not the payload: this returns where you've been (url, title,
+    last visit), never page content. Use it to find a tab you closed; reopen
+    it to read it. Best-effort across every Chrome profile; the live DB is
+    locked while Chrome runs, so each file is copied before being opened
+    read-only. Fully local — no network, same trust boundary as everything
+    else here.
+    """
+    base = Path.home() / "Library/Application Support/Google/Chrome"
+    if not base.exists():
+        return []
+    skip = {u for u in (skip_urls or set()) if u}
+    cutoff_unix = time.time() - hours * 3600
+    cutoff_chrome = int((cutoff_unix + CHROME_EPOCH_OFFSET) * 1_000_000)
+    best: dict[str, dict] = {}
+    for history_db in base.glob("*/History"):
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".db")
+            os.close(fd)
+            shutil.copy2(history_db, tmp)
+            con = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+            rows = con.execute(
+                "SELECT url, title, last_visit_time FROM urls "
+                "WHERE last_visit_time > ? ORDER BY last_visit_time DESC",
+                (cutoff_chrome,),
+            )
+            for url, title, lvt in rows:
+                if not url or not lvt:
+                    continue
+                if url in skip or url.startswith(SKIP_PREFIXES):
+                    continue
+                unix = lvt / 1_000_000 - CHROME_EPOCH_OFFSET
+                cur = best.get(url)
+                if cur is None or unix > cur["visited"]:
+                    best[url] = {"url": url, "title": (title or "").strip(), "visited": unix}
+            con.close()
+        except Exception:
+            continue
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+    out = sorted(best.values(), key=lambda r: r["visited"], reverse=True)
+    return out[:limit]
+
+
 def collect() -> dict:
     """Read current tabs and merge them into state.json. Returns new state.
 
@@ -184,6 +236,70 @@ def collect() -> dict:
         "last_collected": now,
         "last_deduced": state.get("last_deduced"),
         "group_by": state.get("group_by", "task"),
+    }
+    write_json(STATE_PATH, new_state)
+    return new_state
+
+
+def collect_from_ext(ext_tabs: list[dict]) -> dict:
+    """Merge tabs pushed by the Chrome extension into state.json.
+
+    Same preservation contract as collect() — stable handles, notes, clusters,
+    first-seen survive — but the source is the extension's chrome.tabs /
+    chrome.tabGroups data, so it needs no AppleScript and carries the user's
+    real native tab group (name + color) when present.
+    """
+    state = load_json(STATE_PATH, {})
+    if not isinstance(state, dict):
+        state = {}
+    previous = state.get("tabs", {})
+    next_id = state.get("next_id", 1)
+    now = _now()
+
+    urls = [t.get("url", "") for t in ext_tabs if t.get("url")]
+    visits = chrome_history_visits(urls)
+
+    tabs: dict[str, dict] = {}
+    for t in ext_tabs:
+        url = t.get("url", "")
+        if not url or url.startswith(SKIP_PREFIXES):
+            continue
+        prev = previous.get(url, {})
+        tab_id = prev.get("id")
+        if not tab_id:
+            tab_id = f"t{next_id}"
+            next_id += 1
+        rec = {
+            "id": tab_id,
+            "url": url,
+            "title": t.get("title", "") or url,
+            "snippet": t.get("snippet", "") or prev.get("snippet", ""),
+            "window": t.get("window", 0),
+            "index": t.get("index", 0),
+            "first_seen": prev.get("first_seen", now),
+            "last_seen": now,
+            "last_visit": visits.get(url, prev.get("last_visit")),
+            "user_note": prev.get("user_note", ""),
+            "user_cluster": prev.get("user_cluster", ""),
+            "pinned": bool(t.get("pinned", prev.get("pinned", False))),
+            "ext_tab_id": t.get("tab_id"),
+        }
+        # the user's real Chrome tab group, when the tab is in one
+        if t.get("group"):
+            rec["chrome_group"] = t["group"]
+            rec["chrome_group_color"] = t.get("group_color", "")
+        for key in ("user_initiative", "user_workstream"):
+            if key in prev:
+                rec[key] = prev[key]
+        tabs[url] = rec
+
+    new_state = {
+        "tabs": tabs,
+        "next_id": next_id,
+        "last_collected": now,
+        "last_deduced": state.get("last_deduced"),
+        "group_by": state.get("group_by", "task"),
+        "source": "extension",
     }
     write_json(STATE_PATH, new_state)
     return new_state

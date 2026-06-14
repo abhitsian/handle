@@ -38,6 +38,20 @@ looking at."
     tab active               # the frontmost tab ("what I'm looking at")
     tab open / close / note / group / pin / refresh
 
+    # beyond your open tabs — Chrome's own data (titles + links, never content)
+    tab history "datacenter" # query Chrome history; filter the results in plain language
+    tab history "x" --searches  # the omnibox search terms you typed
+    tab closed               # recently-closed tabs, real titles → tab open <url>
+    tab bookmarks "spec"     # search your bookmarks
+    tab downloads "report"   # recent downloads → the local file path (then read the file)
+    tab journeys "evals"     # Chrome's own topical clustering of your browsing
+    tab top                  # most-visited pages
+
+    # sturdier backends (optional)
+    tab ext                  # Chrome-extension bridge status (preferred when connected)
+    tab console t49          # console logs + errors for a tab (via the extension)
+    tab cdp / read --cdp     # opt-in DevTools Protocol read path
+
 `read` is the headline: it pulls a tab's **live, logged-in** content via Chrome
 — past auth walls and JS shells that defeat a plain fetch. Default is the
 cached snapshot (instant); `--live` reads the full page fresh and extracts the
@@ -64,10 +78,57 @@ copy, Handle reads `pbpaste`. Screenshots need macOS Screen Recording (one-time)
 When content comes back empty, the payload's `note` says exactly why (export
 blocked, not signed in, JavaScript-from-Apple-Events off, …).
 
+## Beyond your open tabs — Chrome's own data
+
+Handle also reads Chrome's other local stores, so the agent can reach what
+you're *no longer* looking at. These return **the pointer, never page content**
+— titles, links, file paths, search terms; to get content you `open` the URL
+(or read the local file). All read-only off a copy of Chrome's databases; none
+touch Login Data, Cookies, or Web Data.
+
+| Command | What it surfaces |
+|---|---|
+| `tab history "<q>"` | history — narrow with a keyword + `--days`, then filter the rows in plain language. `--closed` drops still-open tabs; `--searches` switches to omnibox search terms |
+| `tab closed` | recently-closed tabs reconstructed from the session file, with **real titles** — the precise "reopen the tab I just closed" (`tab open <url>`) |
+| `tab bookmarks "<term>"` | your bookmarks |
+| `tab downloads "<term>"` | recent downloads resolved to **local file paths** (with a `moved/deleted` flag) — closes the download → reference loop |
+| `tab journeys "<term>"` | Chrome's own ML clustering of your browsing into topical sessions |
+| `tab top` | most-visited pages, by Chrome's own ranking |
+
+`tab open` now accepts a raw `http(s)://`/`file://` URL too, so anything these
+surface can be reopened as a new tab.
+
+## Sturdier backends — the extension & CDP
+
+The default read path is **AppleScript** (zero install). Two optional backends
+make it sturdier; both are read-only and Handle falls back automatically when
+they aren't there.
+
+**Chrome extension** ([`extension/`](extension/)) — the recommended upgrade.
+Install once (no Chrome relaunch, no open debug port — it connects *outbound* to
+the board on `127.0.0.1:4910`). When `tab ext` says connected, Handle prefers it
+and these get sturdier with no change in how you call them:
+
+- **scan / `list` / `refresh`** via `chrome.tabs` — no Automation permission,
+  faster, and it carries your **real native Chrome tab groups** (colored/named).
+- **`read --live`** via `chrome.scripting` — no "Allow JavaScript from Apple
+  Events" toggle.
+- **screenshots** via `chrome.debugger` — **background tabs, no focus race, no
+  Screen Recording permission**.
+- **`tab console <ref>`** — console logs + errors, which AppleScript can't reach.
+
+Setup: run `python3 app.py`, then `chrome://extensions` → Developer mode → Load
+unpacked → the `extension/` folder. See [`extension/README.md`](extension/README.md).
+
+**DevTools Protocol** (`tab cdp`, `tab read --cdp`) — for anyone who already
+launches Chrome with `--remote-debugging-port`. Same powers as the extension via
+an open port; the extension is the no-friction route to the same thing.
+
 ## What the board does
 
-- **Refresh** — reads every open Chrome tab via AppleScript, plus when you last
-  visited each URL (from Chrome's own history database).
+- **Refresh** — reads every open Chrome tab (via the extension when connected,
+  else AppleScript), plus when you last visited each URL (from Chrome's own
+  history database).
 - **Deduce** — in Claude Code, say `deduce my tabs`. Claude groups the tabs into
   named tasks and writes a one-line summary for each. No API key needed — the
   deduction runs through your Claude Code session.
@@ -123,4 +184,8 @@ Handle does not call any AI API itself. When you want your tabs sorted:
 | `state.json`      | the app      | tabs, notes, pins, group overrides, timestamps |
 | `deductions.json` | Claude Code  | task names, summaries, per-tab one-liners   |
 | `actions.json`    | app + Claude Code | queued actions and their results       |
-| `collect.py`      | —            | the AppleScript + history collector         |
+| `collect.py`      | —            | the AppleScript + history collector + extension merge |
+| `chrome_data.py`  | —            | read-only views into Chrome's own data (bookmarks, downloads, searches, journeys, most-visited, sessions) |
+| `cdp.py`          | —            | stdlib DevTools Protocol client (opt-in)    |
+| `extbridge.py`    | —            | in-memory bridge between the board and the extension |
+| `extension/`      | —            | the Chrome companion extension (preferred backend) |

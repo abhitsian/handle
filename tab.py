@@ -13,6 +13,15 @@ greppable; pass --json to any command for machine-readable output.
     tab list                 # every open tab, with handles + groups + stale
     tab find figma           # resolve a fuzzy query to handle(s) by title/url
     tab grep "fable"         # search the on-page content of every tab
+    tab history "datacenter" # query Chrome history (titles + links, no content)
+    tab bookmarks "spec"     # search Chrome bookmarks
+    tab downloads "report"   # recent downloads → local file paths
+    tab journeys "evals"     # Chrome's own topical clustering of browsing
+    tab top                  # most-visited pages
+    tab closed               # recently-closed tabs (real titles, from the session)
+    tab ext                  # Chrome-extension bridge status (the sturdy backend)
+    tab console t7           # console logs + errors for a tab (needs the extension)
+    tab cdp                  # opt-in DevTools Protocol bridge status
     tab read t7              # page text of that tab (cached; --live for full)
     tab read t29 t30 t4      # read several tabs at once
     tab show t7 t3           # full detail for specific tabs
@@ -34,10 +43,62 @@ import io
 import json
 import re
 import sys
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 import collect
+import chrome_data as cd
+import cdp
+
+import os
+HANDLE_URL = os.environ.get("HANDLE_URL", "http://127.0.0.1:4910")
+
+
+# --------------------------------------------------------------------------- #
+# Chrome-extension bridge (preferred backend when the board server + extension
+# are connected): permission-free reads, native groups, race-free screenshots.
+# Everything degrades to AppleScript when the bridge isn't there.
+# --------------------------------------------------------------------------- #
+def _ext_status() -> dict:
+    try:
+        with urllib.request.urlopen(HANDLE_URL + "/ext/status", timeout=1) as r:
+            return json.loads(r.read())
+    except Exception:
+        return {"connected": False}
+
+
+def _ext_alive() -> bool:
+    return bool(_ext_status().get("connected"))
+
+
+def _ext_cmd(method: str, params: dict | None = None, timeout: int = 20) -> dict:
+    body = json.dumps({"method": method, "params": params or {}, "timeout": timeout}).encode()
+    try:
+        req = urllib.request.Request(
+            HANDLE_URL + "/ext/cmd", data=body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout + 5) as r:
+            return json.loads(r.read())
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _ext_screenshot(tab: dict) -> list[str] | None:
+    """Capture a tab via the extension (race-free) → list of PNG paths."""
+    import base64
+    res = _ext_cmd("screenshot", {"tab_id": tab["ext_tab_id"]})
+    data = res.get("data") if isinstance(res, dict) else None
+    if not data:
+        return None
+    collect.SHOTS_DIR.mkdir(exist_ok=True)
+    key = re.sub(r"[^a-zA-Z0-9]", "", tab.get("id", "ext"))[:12] or "ext"
+    path = collect.SHOTS_DIR / f"{key}-ext.png"
+    try:
+        path.write_bytes(base64.b64decode(data))
+    except Exception:
+        return None
+    return [str(path)]
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
@@ -78,7 +139,8 @@ def load_tabs(refresh: bool = False) -> list[dict]:
             "id": tab.get("id", "?"),
             "url": url,
             "title": tab.get("title") or url,
-            "group": tab.get("user_cluster") or guess.get("cluster", ""),
+            # the user's real native Chrome tab group wins over the deduced one
+            "group": tab.get("user_cluster") or tab.get("chrome_group") or guess.get("cluster", ""),
             "summary": guess.get("deduction", ""),
             "note": tab.get("user_note", ""),
             "snippet": tab.get("snippet", ""),
@@ -87,6 +149,8 @@ def load_tabs(refresh: bool = False) -> list[dict]:
             "age_days": round(age, 1) if age is not None else None,
             "stale": bool(age is not None and age >= STALE_DAYS and not pinned),
             "last_seen": tab.get("last_seen"),
+            "ext_tab_id": tab.get("ext_tab_id"),
+            "chrome_group": tab.get("chrome_group", ""),
         })
     out.sort(key=lambda t: _id_num(t["id"]))
     return out
@@ -335,7 +399,11 @@ def _screenshot_payload(tab: dict, kind: str, args) -> dict:
     vision. The only path for Figma/PDF/Office (no DOM text), and forced by
     --shot for anything visual."""
     base = {"id": tab["id"], "title": tab["title"], "url": tab["url"], "kind": kind}
-    shots, err = collect.screenshot_tab(tab["url"], full=getattr(args, "full", False))
+    # extension screenshot is race-free (background tabs, no focus dance)
+    shots = _ext_screenshot(tab) if tab.get("ext_tab_id") is not None and _ext_alive() else None
+    err = ""
+    if not shots:
+        shots, err = collect.screenshot_tab(tab["url"], full=getattr(args, "full", False))
     p = {**base, "source": "screenshot", "chars": 0, "content": "", "shots": shots, "note": ""}
     if kind == "figma":
         p.update(_figma_ref(tab["url"]))
@@ -401,6 +469,25 @@ def _read_one(tab: dict, args) -> dict:
                 "note": "" if clip else "Clipboard is empty — copy something first."}
     if getattr(args, "shot", False):
         return _screenshot_payload(tab, kind, args)
+    # extension read — preferred for --live: permission-free, live DOM
+    if getattr(args, "live", False) and tab.get("ext_tab_id") is not None and _ext_alive():
+        res = _ext_cmd("read", {"tab_id": tab["ext_tab_id"]})
+        text = res.get("text", "") if isinstance(res, dict) else ""
+        if text and not _is_junk(text, kind):
+            return {**base, "source": "extension", "chars": len(text),
+                    "content": text[:chars], "note": ""}
+    if getattr(args, "cdp", False):
+        tgt = cdp.target_for_url(url, port=getattr(args, "port", cdp.DEFAULT_PORT))
+        if not tgt:
+            return {**base, "source": "none", "chars": 0, "content": "",
+                    "note": "CDP: no debug port / no matching target. "
+                            "Start Chrome with --remote-debugging-port=9222 (see `tab cdp`)."}
+        try:
+            text = cdp.evaluate(tgt["webSocketDebuggerUrl"], "document.body.innerText") or ""
+        except Exception as exc:
+            return {**base, "source": "none", "chars": 0, "content": "",
+                    "note": f"CDP read failed: {exc}"}
+        return {**base, "source": "cdp", "chars": len(text), "content": text[:chars], "note": ""}
 
     tried, last_note = [], ""
     for source, fn in _text_rungs(tab, url, kind, args, chars):
@@ -809,9 +896,181 @@ def cmd_active(args) -> None:
     print(_line(hit) if hit else f"Frontmost tab: {url or '(none — is Chrome open?)'}")
 
 
+def _rel(unix: float) -> str:
+    """Compact 'how long ago' for a unix timestamp."""
+    secs = max(0, _now_unix() - unix)
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+def cmd_history(args) -> None:
+    """Query Chrome history — titles + links, no page content.
+
+    The pointer to where you've been. The CLI gives you the substrate (a time
+    window, an optional keyword prefilter, structured rows); natural-language
+    filtering is the agent's job — pull a window with --json, reason over the
+    titles, then `open` or `read` the ones that matter. Reopen to read; this
+    never pulls page content. Open tabs are included by default; --closed drops
+    them to surface only what's no longer around (the "find that tab I closed"
+    case). Fully local — read-only off a copy of the History DB.
+    """
+    hours = args.hours if args.hours is not None else args.days * 24
+    if getattr(args, "searches", False):
+        rows = cd.searches(args.query, days=hours / 24, limit=args.limit)
+        if args.json:
+            print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
+            return
+        if not rows:
+            print(f"No omnibox searches in the last {hours / 24:g}d"
+                  f"{' matching ' + repr(args.query) if args.query else ''}.")
+            return
+        print(f"{len(rows)} search(es)  ·  what you typed into the omnibox\n")
+        for r in rows:
+            print(f"  {_rel(r['when']) if r['when'] else '—':>7}  {r['term']}")
+        return
+    skip = {t["url"] for t in load_tabs()} if args.closed else set()
+    # over-fetch when a keyword prefilter is set so the limit applies post-filter
+    fetch = args.limit if not args.query else max(args.limit * 8, 400)
+    rows = collect.chrome_recent_visits(hours=hours, limit=fetch, skip_urls=skip)
+    if args.query:
+        terms = [w for w in args.query.lower().split() if w]
+        rows = [r for r in rows
+                if all(t in (r["title"] + " " + r["url"]).lower() for t in terms)]
+        rows = rows[:args.limit]
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        win = f"{hours:g}h" if hours < 48 else f"{hours / 24:g}d"
+        print(f"Nothing in Chrome history in the last {win}"
+              f"{' matching ' + repr(args.query) if args.query else ''}.")
+        return
+    win = f"{hours:g}h" if hours < 48 else f"{hours / 24:g}d"
+    scope = "closed tabs only" if args.closed else "all"
+    print(f"{len(rows)} from history  ·  last {win}  ·  {scope}\n")
+    for r in rows:
+        title = r["title"] or r["url"]
+        print(f"  {_rel(r['visited']):>7}  {title[:78]}")
+        print(f"           {r['url']}")
+
+
+def cmd_bookmarks(args) -> None:
+    rows = cd.bookmarks(args.query, limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
+        return
+    if not rows:
+        print(f"No bookmarks{' matching ' + repr(args.query) if args.query else ''}.")
+        return
+    print(f"{len(rows)} bookmark(s)"
+          f"{' matching ' + repr(args.query) if args.query else ''}\n")
+    for r in rows:
+        folder = f"  ·  {r['folder']}" if r["folder"] else ""
+        print(f"  {(r['title'] or r['url'])[:74]}{folder}")
+        print(f"     {r['url']}")
+
+
+def cmd_downloads(args) -> None:
+    rows = cd.downloads(args.query, days=args.days, limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
+        return
+    if not rows:
+        print(f"No downloads in the last {args.days:g}d"
+              f"{' matching ' + repr(args.query) if args.query else ''}.")
+        return
+    print(f"{len(rows)} download(s)  ·  last {args.days:g}d"
+          "   (read one: pass its path to your file reader)\n")
+    for r in rows:
+        gone = "" if r["exists"] else "  ⚠ moved/deleted"
+        print(f"  {_rel(r['downloaded']) if r['downloaded'] else '—':>7}  "
+              f"{(r['name'] or r['path'] or '?')[:70]}{gone}")
+        if r["path"]:
+            print(f"           {r['path']}")
+
+
+def cmd_journeys(args) -> None:
+    rows = cd.journeys(args.query, days=args.days, limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
+        return
+    if not rows:
+        print(f"No journeys in the last {args.days:g}d"
+              f"{' matching ' + repr(args.query) if args.query else ''}.")
+        return
+    print(f"{len(rows)} journey(s)  ·  Chrome's own grouping of your browsing\n")
+    for r in rows:
+        print(f"  [{r['page_count']}p] {r['label'][:72]}")
+        for u in r["urls"][:4]:
+            print(f"         {u[:80]}")
+
+
+def cmd_top(args) -> None:
+    rows = cd.most_visited(limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
+        return
+    if not rows:
+        print("No most-visited data yet.")
+        return
+    print(f"{len(rows)} most-visited  ·  Chrome's own ranking\n")
+    for r in rows:
+        print(f"  {r['visits']:>5}×  {(r['title'] or r['url'])[:70]}")
+        print(f"         {r['url'][:80]}")
+
+
+def cmd_closed(args) -> None:
+    open_urls = {t["url"] for t in load_tabs()}
+    rows = cd.recently_closed(open_urls, limit=args.limit)
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
+        return
+    if not rows:
+        print("No recently-closed tabs found in the session file.")
+        return
+    print(f"{len(rows)} recently-closed tab(s)  ·  from the session file, "
+          "real titles  ·  reopen: tab open <url>\n")
+    for r in rows:
+        pin = "📌 " if r.get("pinned") else ""
+        print(f"  {pin}{(r['title'] or r['url'])[:74]}")
+        print(f"     {r['url']}")
+
+
+def cmd_cdp(args) -> None:
+    """Status of the opt-in DevTools Protocol bridge."""
+    port = args.port
+    ver = cdp.version(port)
+    tgts = cdp.targets(port)
+    if not ver and not tgts:
+        print(f"CDP not enabled (nothing listening on port {port}).\n\n"
+              "It's the opt-in capability tier: a cleaner read path (real-tab JS,\n"
+              "focus-race-free screenshots) on top of the default AppleScript read.\n"
+              "Enable by starting Chrome from a cold start with:\n\n"
+              "  /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\\n"
+              f"      --remote-debugging-port={port}\n\n"
+              "Then `tab read t7 --cdp`. Read-only — Handle never drives the page.")
+        return
+    browser = (ver or {}).get("Browser", "Chrome")
+    print(f"CDP enabled on port {port}  ·  {browser}  ·  {len(tgts)} page target(s)\n")
+    open_by_url = {t["url"]: t for t in load_tabs()}
+    for t in tgts[:30]:
+        handle = open_by_url.get(t["url"], {}).get("id", "  ")
+        print(f"  {handle:>3}  {(t.get('title') or t['url'])[:72]}")
+    print("\nRead via CDP:  tab read <ref> --cdp")
+
+
 def cmd_open(args) -> None:
+    ref = args.ref
+    # a raw URL (from history/bookmarks/closed) opens as a new tab
+    if ref.startswith(("http://", "https://", "file://")):
+        n = collect.open_urls([ref])
+        print(f"{'Opened' if n else 'Could not open'}  {ref}")
+        return
     tabs = load_tabs()
-    tab = resolve_one(args.ref, tabs)
+    tab = resolve_one(ref, tabs)
     ok = collect.focus_tab(tab["url"])
     print(f"{'Focused' if ok else 'Could not focus'} {tab['id']}  {tab['title']}")
 
@@ -856,8 +1115,63 @@ def cmd_pin(args) -> None:
 
 
 def cmd_refresh(args) -> None:
+    # the extension keeps state.json fresh via /ext/sync — no AppleScript needed
+    if _ext_alive():
+        tabs = load_tabs()
+        print(f"Up to date via the Handle extension — {len(tabs)} open tab(s). "
+              "(No AppleScript needed.)")
+        return
     state = collect.collect()
     print(f"Refreshed — {len(state['tabs'])} open tab(s) in state.json.")
+
+
+def cmd_console(args) -> None:
+    """Console logs + errors for a tab — needs the Handle extension (debugger)."""
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    if tab.get("ext_tab_id") is None or not _ext_alive():
+        print("Console needs the Handle extension connected (it uses chrome.debugger).\n"
+              "Install it (see extension/ + `tab ext`) and open the board, then retry.")
+        return
+    res = _ext_cmd("console", {"tab_id": tab["ext_tab_id"], "ms": args.ms}, timeout=args.ms // 1000 + 10)
+    if args.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return
+    if res.get("error"):
+        print(f"Console read failed: {res['error']}")
+        return
+    logs = res.get("logs", [])
+    if not logs:
+        print(f"No console output captured in {args.ms}ms for {tab['id']}. "
+              f"({res.get('note', '')})")
+        return
+    print(f"{len(logs)} console line(s) for {tab['id']}  {tab['title']}\n")
+    for L in logs:
+        print(f"  [{L.get('level', '?'):>7}]  {L.get('text', '')[:200]}")
+    if res.get("note"):
+        print(f"\n  · {res['note']}")
+
+
+def cmd_ext(args) -> None:
+    """Status of the Handle Chrome-extension bridge."""
+    st = _ext_status()
+    if st.get("connected"):
+        print(f"Handle extension connected  ·  {st.get('tab_count', '?')} tabs synced "
+              f"{st.get('last_sync_ago', '?')}s ago  ·  ext v{st.get('ext_version', '?')}\n"
+              "Reads/scan/screenshots prefer the extension (permission-free, race-free, native groups).")
+    else:
+        print(
+            "Handle extension NOT connected.\n\n"
+            "It's the sturdier backend: permission-free tab scan, your real native tab\n"
+            "groups, race-free background screenshots, and console errors — installed\n"
+            "once, no Chrome relaunch, no open debug port (it connects outbound to\n"
+            "Handle's local server).\n\n"
+            "Set up:\n"
+            "  1. Start the board:  python3 app.py   (serves 127.0.0.1:4910)\n"
+            "  2. chrome://extensions → enable Developer mode → Load unpacked →\n"
+            f"     select {APP_DIR / 'extension'}\n"
+            "  3. `tab ext` again to confirm.\n\n"
+            "Until then everything falls back to AppleScript — nothing breaks.")
 
 
 # --------------------------------------------------------------------------- #
@@ -931,8 +1245,24 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --shot/figma/pdf: scroll and capture the whole page, not just the viewport")
     sr.add_argument("--chars", type=int, default=None,
                     help="max characters per tab (default 8000, or 20000 with --md)")
+    sr.add_argument("--cdp", action="store_true",
+                    help="read via the opt-in DevTools Protocol (needs --remote-debugging-port; see `tab cdp`)")
+    sr.add_argument("--port", type=int, default=cdp.DEFAULT_PORT, help="CDP debug port (default 9222)")
     sr.add_argument("--json", action="store_true")
     sr.set_defaults(func=cmd_read)
+
+    scdp = sub.add_parser("cdp", help="status of the opt-in DevTools Protocol bridge")
+    scdp.add_argument("--port", type=int, default=cdp.DEFAULT_PORT)
+    scdp.set_defaults(func=cmd_cdp)
+
+    sext = sub.add_parser("ext", help="status of the Handle Chrome-extension bridge")
+    sext.set_defaults(func=cmd_ext)
+
+    scon = sub.add_parser("console", help="console logs + errors for a tab (needs the extension)")
+    scon.add_argument("ref")
+    scon.add_argument("--ms", type=int, default=1800, help="capture window in ms (default 1800)")
+    scon.add_argument("--json", action="store_true")
+    scon.set_defaults(func=cmd_console)
 
     ssh = sub.add_parser("shot", help="screenshot a tab for the agent to read with vision")
     ssh.add_argument("ref")
@@ -948,6 +1278,46 @@ def build_parser() -> argparse.ArgumentParser:
     sa = sub.add_parser("active", help="the frontmost tab")
     sa.add_argument("--json", action="store_true")
     sa.set_defaults(func=cmd_active)
+
+    shy = sub.add_parser("history", help="query Chrome history (titles + links, no content)")
+    shy.add_argument("query", nargs="?", help="keyword prefilter (all words must match title/url)")
+    shy.add_argument("--days", type=float, default=7, help="how far back to look (default 7)")
+    shy.add_argument("--hours", type=float, default=None, help="window in hours (overrides --days)")
+    shy.add_argument("--limit", type=int, default=40, help="max rows (default 40)")
+    shy.add_argument("--closed", action="store_true", help="exclude currently-open tabs")
+    shy.add_argument("--searches", action="store_true", help="omnibox search terms instead of pages")
+    shy.add_argument("--json", action="store_true")
+    shy.set_defaults(func=cmd_history)
+
+    sbm = sub.add_parser("bookmarks", help="search/list Chrome bookmarks (titles + links)")
+    sbm.add_argument("query", nargs="?", help="filter by title/url/folder")
+    sbm.add_argument("--limit", type=int, default=200)
+    sbm.add_argument("--json", action="store_true")
+    sbm.set_defaults(func=cmd_bookmarks)
+
+    sdl = sub.add_parser("downloads", help="recent downloads → local file paths")
+    sdl.add_argument("query", nargs="?", help="filter by filename/source url")
+    sdl.add_argument("--days", type=float, default=30)
+    sdl.add_argument("--limit", type=int, default=40)
+    sdl.add_argument("--json", action="store_true")
+    sdl.set_defaults(func=cmd_downloads)
+
+    sjr = sub.add_parser("journeys", help="Chrome's own topical clustering of your browsing")
+    sjr.add_argument("query", nargs="?", help="filter by keyword/url")
+    sjr.add_argument("--days", type=float, default=30)
+    sjr.add_argument("--limit", type=int, default=25)
+    sjr.add_argument("--json", action="store_true")
+    sjr.set_defaults(func=cmd_journeys)
+
+    stp = sub.add_parser("top", help="most-visited pages (Chrome's own ranking)")
+    stp.add_argument("--limit", type=int, default=25)
+    stp.add_argument("--json", action="store_true")
+    stp.set_defaults(func=cmd_top)
+
+    scl = sub.add_parser("closed", help="recently-closed tabs from the session file (real titles)")
+    scl.add_argument("--limit", type=int, default=40)
+    scl.add_argument("--json", action="store_true")
+    scl.set_defaults(func=cmd_closed)
 
     so = sub.add_parser("open", help="bring a tab to the front")
     so.add_argument("ref")

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Handle",
+  "version": "1.0.0",
+  "description": "Gives Handle a sturdier, permission-free view of your open Chrome tabs — native tab groups, race-free screenshots, console errors. Connects only to Handle's local server (127.0.0.1:4910). Read-only; never drives the page.",
+  "background": { "service_worker": "background.js" },
+  "permissions": ["tabs", "tabGroups", "scripting", "debugger", "alarms"],
+  "host_permissions": ["http://127.0.0.1:4910/*", "<all_urls>"],
+  "minimum_chrome_version": "116"
+}
