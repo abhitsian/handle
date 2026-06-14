@@ -2,17 +2,24 @@
 
 **[🔗 Live site →](https://abhitsian.github.io/handle/)**
 
-Give every open Chrome tab a **stable handle** (`t1`, `t2`…) you can reference
-from a Claude Code session — then read its live content, search across what's
-open, and act on it. There's also a board: see tabs grouped into the tasks they
-belong to, pin the ones that matter, and spot the ones that have gone **stale**.
+**Let your AI coding agent read the Chrome you're already signed into.** Handle
+gives your agent your real, logged-in browser as **read-only context** — the
+tabs you have open (past the login wall), and the trail behind them (history,
+closed tabs, bookmarks, downloads). The other tools that touch the web
+(browser-use, Browserbase, ChatGPT's agent) spin up a *fresh, signed-out*
+browser; Handle reads the one you actually work in.
 
-The same handle (`t49`) names the tab on the board and in your session.
+Every open tab gets a **stable handle** (`t1`, `t2`…) you reference from a Claude
+Code session — read its live content, search across what's open, ask a question
+across all of it (cited), save research for later. There's also a board: tabs
+grouped into the tasks they belong to, pinned, and flagged when they go
+**stale**. The same handle (`t49`) names the tab on the board and in your session.
 
 Ships three ways: a **CLI** (`tab`), a **board** (localhost:4910), and an **MCP
-server** ([`mcp/`](mcp/)) so any agent can use it as first-class tools —
-`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. It runs
-locally and reads *your* Chrome; it never exposes anyone else's tabs.
+server** ([`mcp/`](mcp/), 25 tools) so any agent uses it as first-class tools —
+`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. Local,
+read-only, no API key, open source. It reads *your* Chrome — it never drives the
+page, and never exposes anyone else's tabs.
 
 ## From Claude Code
 

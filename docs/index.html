@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Handle — let your AI read the tabs you have open</title>
+<title>Handle — let your AI read the Chrome you're already signed into</title>
 <meta property="og:title" content="Handle — let your AI read the tabs you have open">
 <meta property="og:description" content="Stop copy-pasting pages into your AI. Handle lets your AI assistant read what you already have open in your browser — the doc you're reading, the work files behind your login, designs and PDFs — just by asking for it in plain words.">
 <meta name="theme-color" content="#0a0f14">
@@ -59,6 +59,8 @@
   .headline .accent { color:var(--mint); }
   .lede { color:var(--ink-soft); font-size:clamp(15px,1.5vw,17px); margin-top:18px; max-width:40em; }
   .lede b { color:var(--ink); font-weight:500; }
+  .hero-meta { color:var(--ink-soft); font-family:"JetBrains Mono",monospace; font-size:12.5px; margin-top:16px; max-width:40em; }
+  .hero-meta b { color:var(--mint); font-weight:500; }
   .cta-row { display:flex; gap:14px; margin-top:28px; flex-wrap:wrap; }
   .btn { font-family:"Space Grotesk",sans-serif; font-size:14.5px; font-weight:600; padding:12px 22px;
     border-radius:9px; transition:.15s; display:inline-flex; align-items:center; gap:8px; cursor:pointer; border:none; }
@@ -294,9 +296,10 @@
   <!-- HERO -->
   <section class="hero">
     <div class="hero-text">
-      <div class="eyebrow">stop copy-pasting into your AI</div>
+      <div class="eyebrow">browser context for your AI coding agent</div>
       <h1 class="headline">Your AI can't read the tabs you have open. <span class="accent">Now it can.</span></h1>
-      <p class="lede">You've got the spec, the doc, the dashboard open in your browser. To get any of it into your AI assistant, you copy and paste — one page at a time. <b>Handle lets your AI read what's already on your screen</b> — even the work documents behind your company login. Ask it to <em>"summarize the doc I'm reading"</em> and it does, without you copying a thing.</p>
+      <p class="lede">You've got the spec, the doc, the dashboard open — behind your work login. The other AI tools that touch the web open their own fresh, signed-out browser, so none of it is visible to them. <b>Handle lets your agent read the Chrome you're already signed into</b> — the tabs you have open and the trail behind them — in plain language, no copy-paste.</p>
+      <p class="hero-meta">Works as an <b>MCP server</b> (25 tools), a CLI, and a board. Local, read-only, no API key, open source.</p>
       <div class="cta-row">
         <a href="#install" class="btn btn-primary">Use it ↓</a>
         <a href="https://github.com/abhitsian/handle" target="_blank" rel="noopener" class="btn btn-ghost">View on GitHub →</a>
@@ -372,7 +375,7 @@
       </div>
       <div class="feature">
         <h3><span class="ic">🔒</span> Your real browser, not a sandbox</h3>
-        <p>Most AI tools that "use the web" — <b>ChatGPT's agent</b>, or developer browser tools like <b>Playwright</b> and <b>Browserbase</b> — open their own fresh browser, signed out of everything, so your real work is invisible to them. Handle reads the tabs <b>you're actually using</b>, in your own browser, already signed in. If you can see it, it can read it — the Google Doc, the SharePoint file, the internal dashboard.</p>
+        <p>Most AI tools that "use the web" — <b>ChatGPT's agent</b>, or developer browser tools like <b>Playwright</b> and <b>Browserbase</b> — open their own fresh browser, signed out of everything, so your real work is invisible to them. Handle reads the tabs <b>you're actually using</b>, in your own browser, already signed in. If you can see it, it can read it — the Google Doc, the SharePoint file, the internal dashboard. And it only ever <b>reads</b>: it doesn't click, type, or drive the page. You point, it reads. That's the trade — give up the robot that browses for you, get the one that can actually see your work.</p>
       </div>
       <div class="feature">
         <h3><span class="ic">🎨</span> Designs, PDFs and sheets too</h3>
