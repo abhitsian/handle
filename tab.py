@@ -72,7 +72,7 @@ def _ext_alive() -> bool:
     return bool(_ext_status().get("connected"))
 
 
-def _ext_cmd(method: str, params: dict | None = None, timeout: int = 20) -> dict:
+def _ext_cmd(method: str, params: dict | None = None, timeout: int = 35) -> dict:
     body = json.dumps({"method": method, "params": params or {}, "timeout": timeout}).encode()
     try:
         req = urllib.request.Request(
@@ -1169,7 +1169,7 @@ def cmd_console(args) -> None:
         print("Console needs the Handle extension connected (it uses chrome.debugger).\n"
               "Install it (see extension/ + `tab ext`) and open the board, then retry.")
         return
-    res = _ext_cmd("console", {"tab_id": tab["ext_tab_id"], "ms": args.ms}, timeout=args.ms // 1000 + 10)
+    res = _ext_cmd("console", {"tab_id": tab["ext_tab_id"], "ms": args.ms}, timeout=args.ms // 1000 + 35)
     if args.json:
         print(json.dumps(res, indent=2, ensure_ascii=False))
         return

@@ -28,7 +28,13 @@ def mark_sync(meta: dict | None = None) -> None:
         _ext_meta = meta or {}
 
 
-def alive(ttl: float = 12.0) -> bool:
+# The extension long-polls /ext/poll (~25s) and re-syncs on a 30s alarm, so a
+# heartbeat lands at least every ~25-30s. Keep the liveness TTL comfortably
+# above that window or `tab ext` reads "not connected" between heartbeats.
+_ALIVE_TTL = 60.0
+
+
+def alive(ttl: float = _ALIVE_TTL) -> bool:
     """True if the extension pushed or polled within `ttl` seconds."""
     with _cond:
         return (time.time() - _last_sync) < ttl
@@ -37,7 +43,7 @@ def alive(ttl: float = 12.0) -> bool:
 def status() -> dict:
     with _cond:
         return {
-            "connected": (time.time() - _last_sync) < 12.0,
+            "connected": (time.time() - _last_sync) < _ALIVE_TTL,
             "last_sync_ago": round(time.time() - _last_sync, 1) if _last_sync else None,
             "pending": len(_queue),
             **_ext_meta,
@@ -77,6 +83,7 @@ def poll(wait: float = 25.0) -> dict | None:
 
 
 def deliver_result(cmd_id: str, result: dict) -> None:
+    mark_sync(_ext_meta)  # a posted result is definitive proof the extension is live
     with _cond:
         _results[cmd_id] = result
         _cond.notify_all()

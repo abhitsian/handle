@@ -10,8 +10,17 @@
 // clicks, types, or navigates. It talks to nothing but 127.0.0.1:4910.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.0.0";
-let polling = false;
+const VERSION = "1.0.1";
+
+// Never let a debugger op hang forever (e.g. attach stalls because DevTools or
+// another CDP client already holds the tab). Reject fast so the caller gets a
+// clean error and Handle falls back, instead of the CLI waiting out its timeout.
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(label + " timed out after " + ms + "ms — is DevTools or another debugger attached to this tab?")), ms)),
+  ]);
+}
 
 // ---- push tabs + groups ---------------------------------------------------
 async function syncTabs() {
@@ -76,11 +85,24 @@ async function evalIn(tabId, expression) {
   return { value: res.result };
 }
 
-async function screenshot(tabId) {
-  await chrome.debugger.attach({ tabId }, "1.3");
+// Attach cleanly: if a stale attachment is lingering (e.g. a prior dispatch
+// died before its finally{} could detach), clear it and retry once.
+async function attachClean(target) {
   try {
+    await chrome.debugger.attach(target, "1.3");
+  } catch (e) {
+    try { await chrome.debugger.detach(target); } catch (_) {}
+    await chrome.debugger.attach(target, "1.3");
+  }
+}
+
+async function screenshot(tabId) {
+  await attachClean({ tabId });
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Page.enable");
+    // viewport capture — captureBeyondViewport errors (-32603) on background tabs
     const { data } = await chrome.debugger.sendCommand(
-      { tabId }, "Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+      { tabId }, "Page.captureScreenshot", { format: "png" });
     return { data }; // base64 PNG
   } finally {
     try { await chrome.debugger.detach({ tabId }); } catch (e) {}
@@ -88,7 +110,7 @@ async function screenshot(tabId) {
 }
 
 async function consoleLogs(tabId, ms = 1800) {
-  await chrome.debugger.attach({ tabId }, "1.3");
+  await attachClean({ tabId });
   const logs = [];
   const onEvent = (src, method, params) => {
     if (src.tabId !== tabId) return;
@@ -121,54 +143,78 @@ async function dispatch(cmd) {
   switch (method) {
     case "read": return await readTab(tabId);
     case "eval": return await evalIn(tabId, params.expression || "");
-    case "screenshot": return await screenshot(tabId);
-    case "console": return await consoleLogs(tabId, params.ms || 1800);
+    case "screenshot": return await withTimeout(screenshot(tabId), 8000, "screenshot");
+    case "console": return await withTimeout(consoleLogs(tabId, params.ms || 1800), (params.ms || 1800) + 6000, "console");
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };
   }
 }
 
-// ---- long-poll loop -------------------------------------------------------
+// ---- long-poll loop (self-healing) ----------------------------------------
+// MV3 suspends idle service workers. An in-flight fetch keeps the worker warm,
+// so we keep a poll request parked at almost all times and heal fast: short
+// error backoff (no long dead-air gaps), a stall check that restarts a wedged
+// loop, and ensurePolling() called from every wake (alarm + tab events).
+let lastPollAt = 0;
+let looping = false;
+
+async function handleCommand(cmd) {
+  let result;
+  try { result = await dispatch(cmd); }
+  catch (e) { result = { error: String(e) }; }
+  try {
+    await fetch(`${HANDLE}/ext/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: cmd.id, result }),
+    });
+  } catch (e) {}
+}
+
 async function pollLoop() {
-  if (polling) return;
-  polling = true;
-  while (polling) {
-    let cmd = null;
-    try {
-      const r = await fetch(`${HANDLE}/ext/poll`);
-      cmd = await r.json();
-    } catch (e) {
-      // server down — back off, then retry
-      await new Promise((res) => setTimeout(res, 3000));
-      continue;
-    }
-    if (cmd && cmd.id) {
-      let result;
-      try { result = await dispatch(cmd); }
-      catch (e) { result = { error: String(e) }; }
+  if (looping) return;
+  looping = true;
+  try {
+    while (looping) {
+      let cmd = null;
       try {
-        await fetch(`${HANDLE}/ext/result`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: cmd.id, result }),
-        });
-      } catch (e) {}
+        const r = await fetch(`${HANDLE}/ext/poll`);
+        lastPollAt = Date.now();
+        cmd = await r.json();
+      } catch (e) {
+        await new Promise((res) => setTimeout(res, 1000));
+        continue;
+      }
+      // Dispatch WITHOUT awaiting: the loop re-polls immediately so a fetch is
+      // always in flight. That pending request keeps the MV3 worker warm
+      // through a slow debugger op (a bare await would let it suspend mid-op).
+      if (cmd && cmd.id) handleCommand(cmd);
     }
+  } finally {
+    looping = false;
+  }
+}
+
+function ensurePolling() {
+  // start if not running, or if a prior loop looks stalled / wedged
+  if (!looping || Date.now() - lastPollAt > 35000) {
+    looping = false;
+    pollLoop();
   }
 }
 
 // ---- lifecycle ------------------------------------------------------------
-function kick() { syncTabs(); pollLoop(); }
+function kick() { syncTabs(); ensurePolling(); }
 
 chrome.runtime.onStartup.addListener(kick);
 chrome.runtime.onInstalled.addListener(kick);
 
-// keep the service worker alive + the poll loop running
+// 30s alarm is the backstop that revives a suspended worker
 chrome.alarms.create("handle-keepalive", { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener(() => { syncTabs(); pollLoop(); });
+chrome.alarms.onAlarm.addListener(kick);
 
-// re-sync whenever the tab set changes
-const reSync = () => syncTabs();
+// any tab activity both re-syncs AND revives the poll loop
+const reSync = () => { syncTabs(); ensurePolling(); };
 chrome.tabs.onCreated.addListener(reSync);
 chrome.tabs.onRemoved.addListener(reSync);
 chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete" || info.title || info.url) reSync(); });
