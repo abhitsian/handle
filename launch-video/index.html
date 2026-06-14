@@ -29,145 +29,134 @@
       #s3 { opacity: 0; z-index: 3; }
       #s4 { opacity: 0; z-index: 4; }
 
-      .stage { display: flex; align-items: center; gap: 90px; width: 100%; padding: 0 150px; }
-      .browser { width: 760px; background: linear-gradient(180deg,#101b23,#0c151c);
-        border: 1px solid #1f2c36; border-radius: 20px; box-shadow: 0 30px 80px rgba(0,0,0,.5);
-        padding: 0 0 26px; position: relative; }
-      .bbar { display:flex; align-items:center; gap:10px; padding: 20px 26px; border-bottom: 1px solid #1f2c36; }
-      .dot { width: 14px; height: 14px; border-radius: 50%; background: #2a3a45; }
-      .urlbar { margin-left: 16px; flex: 1; height: 30px; border-radius: 8px; background:#172430;
-        display:flex; align-items:center; padding: 0 16px; font-size: 16px; color:#65737d; }
-      .tabs { padding: 26px 26px 6px; display: flex; flex-direction: column; gap: 16px; position: relative; }
-      .tab { display:flex; align-items:center; gap: 18px; padding: 16px 18px; border-radius: 12px;
-        background:#0f1a22; border: 1px solid #182530; }
-      .fav { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg,#1d3b33,#16242e); flex:0 0 auto; }
-      .lines { flex:1; display:flex; flex-direction:column; gap: 9px; }
-      .ln { height: 9px; border-radius: 5px; background:#22323d; }
-      .ln.s { width: 55%; }
-      .chip { font-family:"JetBrains Mono",monospace; font-weight:700; font-size: 20px; color:#06140e;
-        background:#4fe0b0; border-radius: 8px; padding: 5px 11px; flex:0 0 auto; opacity: 0; }
-      .beam { position:absolute; left: 14px; right: 14px; height: 64px; border-radius: 12px; top: 26px;
-        background: linear-gradient(180deg, rgba(79,224,176,0), rgba(79,224,176,.22), rgba(79,224,176,0));
-        box-shadow: 0 0 40px rgba(79,224,176,.4); opacity: 0; }
+      .stage { display: flex; align-items: center; gap: 80px; width: 100%; padding: 0 150px; justify-content: center; }
+      .col { display: flex; flex-direction: column; }
 
-      .term { width: 620px; background: linear-gradient(180deg,#0c1a14,#0a1610);
+      /* terminal */
+      .term { background: linear-gradient(180deg,#0c1a14,#0a1610);
         border: 1px solid #1d3b33; border-radius: 18px; padding: 30px 34px; box-shadow: 0 0 0 1px rgba(79,224,176,.06); }
       .term .who { font-family:"JetBrains Mono",monospace; font-size: 17px; color:#4fe0b0; letter-spacing:.08em; text-transform: uppercase; margin-bottom: 22px; }
       .term .line { font-family:"JetBrains Mono",monospace; font-size: 26px; color:#cdd6dc; margin-bottom: 14px; }
       .term .pr { color:#4fe0b0; }
-      .term .bad { color:#ff6b6b; }
       .term .ok { color:#4fe0b0; }
 
-      .packet { position: absolute; width: 18px; height: 18px; border-radius: 50%; background:#4fe0b0;
-        box-shadow: 0 0 22px #4fe0b0; opacity: 0; left: 905px; top: 500px; z-index: 20; }
+      /* themes (scene 1) */
+      .themes { display:flex; flex-direction:column; gap:16px; margin-top: 8px; }
+      .theme { font-family:"JetBrains Mono",monospace; font-size: 25px; color:#cdd6dc; display:flex; align-items:center; gap:16px; }
+      .theme::before { content:""; width:12px; height:12px; border-radius:3px; background:#4fe0b0; box-shadow:0 0 14px rgba(79,224,176,.55); flex:0 0 auto; }
 
+      /* history panel (scene 2) */
+      .hist { width: 820px; background: linear-gradient(180deg,#101b23,#0c151c);
+        border: 1px solid #1f2c36; border-radius: 20px; padding: 22px; position: relative;
+        box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+      .histcap { font-family:"JetBrains Mono",monospace; font-size: 15px; color:#8a98a2; letter-spacing:.08em;
+        text-transform: uppercase; padding: 4px 6px 16px; color-adjust: exact; }
+      .histrow { display:flex; align-items:center; gap:16px; padding:16px 18px; border-radius:12px;
+        background:#0f1a22; border:1px solid #182530; margin-bottom:12px;
+        font-family:"JetBrains Mono",monospace; font-size:20px; color:#7c8a93; }
+      .histrow:last-child { margin-bottom:0; }
+      .histrow .ago { margin-left:auto; font-size:16px; color:#7c8a93; flex:0 0 auto; }
+      .beam { position:absolute; left: 16px; right: 16px; height: 66px; border-radius: 12px; top: 56px;
+        background: linear-gradient(180deg, rgba(79,224,176,0), rgba(79,224,176,.22), rgba(79,224,176,0));
+        box-shadow: 0 0 40px rgba(79,224,176,.4); opacity: 0; }
+
+      /* browser (scene 3) */
+      .browser { width: 760px; background: linear-gradient(180deg,#101b23,#0c151c);
+        border: 1px solid #1f2c36; border-radius: 20px; box-shadow: 0 30px 80px rgba(0,0,0,.5); padding: 0 0 26px; position: relative; }
+      .bbar { display:flex; align-items:center; gap:10px; padding: 20px 26px; border-bottom: 1px solid #1f2c36; }
+      .dot { width: 14px; height: 14px; border-radius: 50%; background: #2a3a45; }
+      .urlbar { margin-left: 16px; flex: 1; height: 30px; border-radius: 8px; background:#172430;
+        display:flex; align-items:center; padding: 0 16px; font-size: 16px; color:#8a98a2; }
+      .tabs { padding: 26px 26px 6px; display: flex; flex-direction: column; gap: 16px; position: relative; }
+      .tab { display:flex; align-items:center; gap: 18px; padding: 18px 18px; border-radius: 12px;
+        background:#0f1a22; border: 1px solid #182530; }
+      .fav { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg,#1d3b33,#16242e); flex:0 0 auto; }
+      .tname { font-family:"JetBrains Mono",monospace; font-size: 21px; color:#aab6bd; }
+      .lock { margin-left:auto; font-size: 17px; color:#4fe0b0; flex:0 0 auto; }
+      .chip { font-family:"JetBrains Mono",monospace; font-weight:700; font-size: 19px; color:#06140e;
+        background:#4fe0b0; border-radius: 8px; padding: 5px 11px; flex:0 0 auto; opacity: 0; }
+
+      /* text blocks */
       .eyebrow { font-family:"JetBrains Mono",monospace; font-size: 20px; letter-spacing: .22em;
         text-transform: uppercase; color:#4fe0b0; }
-      .headline { font-size: 92px; font-weight: 700; line-height: 1.02; letter-spacing: -0.03em; }
+      .headline { font-size: 86px; font-weight: 700; line-height: 1.03; letter-spacing: -0.03em; }
       .headline .accent { color:#4fe0b0; }
-      .sub { font-size: 30px; color:#94a3ad; max-width: 1100px; line-height: 1.5; }
-      .s1-text { position: absolute; left: 150px; bottom: 100px; right: 150px; }
-      .s2-text { position: absolute; left: 150px; bottom: 130px; }
+      .sub { font-size: 28px; color:#94a3ad; line-height: 1.5; }
+      .scene-cap { position: absolute; left: 150px; right: 150px; bottom: 96px; text-align: center; }
 
-      .range { display:flex; flex-direction: column; gap: 44px; width: 100%; padding: 0 160px; align-items: center; }
-      .fmts { display: flex; gap: 22px; }
-      .fmt { font-family:"JetBrains Mono",monospace; font-size: 28px; color:#86f0d0; background:#0e1620;
-        border: 1px solid #1f2c36; border-radius: 12px; padding: 18px 30px; }
-      .demorow { display:flex; gap: 30px; width: 100%; max-width: 1300px; }
-      .demo { flex:1; background:#0e1620; border:1px solid #1f2c36; border-radius: 16px; padding: 30px 34px; }
-      .demo .q { font-family:"JetBrains Mono",monospace; font-size: 26px; color:#e8edf0; margin-bottom: 16px; }
-      .demo .q .pr { color:#f4b860; }
-      .demo .a { font-family:"JetBrains Mono",monospace; font-size: 24px; color:#94a3ad; }
-      .demo .a b { color:#4fe0b0; font-weight: 700; }
-
-      .cta { display:flex; flex-direction: column; align-items:center; gap: 30px; }
-      .mark { width: 130px; height: 130px; border-radius: 30px; background: linear-gradient(180deg,#16242e,#0e1822);
+      /* CTA (scene 4) */
+      .cta { display:flex; flex-direction: column; align-items:center; gap: 26px; }
+      .mark { width: 124px; height: 124px; border-radius: 30px; background: linear-gradient(180deg,#16242e,#0e1822);
         border: 1px solid #2c5247; display:flex; align-items:center; justify-content:center;
         box-shadow: 0 0 60px rgba(79,224,176,.25); }
-      .mark span { font-family:"JetBrains Mono",monospace; font-weight:700; font-size: 56px; color:#4fe0b0; }
-      .word { font-size: 110px; font-weight: 700; letter-spacing: -0.03em; }
-      .ctatag { font-size: 32px; color:#94a3ad; }
-      .cmd { font-family:"JetBrains Mono",monospace; font-size: 34px; color:#4fe0b0; background:#0c1a14;
-        border: 1px solid #1d3b33; border-radius: 12px; padding: 18px 34px; }
-      .url { font-family:"JetBrains Mono",monospace; font-size: 26px; color:#8a98a2; }
+      .mark span { font-family:"JetBrains Mono",monospace; font-weight:700; font-size: 54px; color:#4fe0b0; }
+      .word { font-size: 104px; font-weight: 700; letter-spacing: -0.03em; }
+      .ctatag { font-size: 40px; font-weight: 500; color:#e8edf0; letter-spacing: -0.02em; }
+      .ctatag .accent { color:#4fe0b0; }
+      .meta { font-family:"JetBrains Mono",monospace; font-size: 22px; color:#8a98a2; letter-spacing:.04em; }
+      .cmd { font-family:"JetBrains Mono",monospace; font-size: 32px; color:#4fe0b0; background:#0c1a14;
+        border: 1px solid #1d3b33; border-radius: 12px; padding: 16px 32px; }
+      .url { font-family:"JetBrains Mono",monospace; font-size: 25px; color:#8a98a2; }
     </style>
   </head>
   <body>
-    <div id="root" data-composition-id="main" data-start="0" data-duration="28" data-width="1920" data-height="1080">
+    <div id="root" data-composition-id="main" data-start="0" data-duration="27" data-width="1920" data-height="1080">
 
-      <!-- ===== SCENE 1 — the problem ===== -->
+      <!-- ===== SCENE 1 — the hook: ask your browser about your day ===== -->
       <div id="s1" class="scene">
-        <div class="stage">
-          <div class="browser" id="s1-browser">
-            <div class="bbar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><div class="urlbar mono">chrome — 9 tabs open</div></div>
-            <div class="tabs">
-              <div class="tab s1tab"><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab s1tab"><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab s1tab"><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab s1tab"><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab s1tab"><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
+        <div class="col" style="width: 1180px; gap: 0;">
+          <div class="eyebrow" id="s1-eye">chrome can't answer this. handle can.</div>
+          <div class="headline" id="s1-head" style="margin-top: 22px">Ask your browser<br/><span class="accent">what you did today.</span></div>
+          <div class="term" id="s1-term" style="margin-top: 48px;">
+            <div class="who">▍your ai</div>
+            <div class="line"><span class="pr">&gt;</span> what did I work on today?</div>
+            <div class="themes">
+              <div class="theme s1th">shipped a product launch</div>
+              <div class="theme s1th">vendor &amp; pricing research</div>
+              <div class="theme s1th">a long stretch of reading</div>
             </div>
           </div>
-          <div class="term" id="s1-term">
-            <div class="who">▍your ai</div>
-            <div class="line"><span class="pr">&gt;</span> summarize the doc I'm reading</div>
-            <div class="line bad" id="s1-bad">✗ I can't see your tabs</div>
-          </div>
-        </div>
-        <div class="s1-text">
-          <div class="eyebrow" id="s1-eye">the agent is blind to your browser</div>
-          <div class="headline" id="s1-head" style="margin-top:18px">Your agent can't read<br/>your <span class="accent">logged-in</span> tabs.</div>
         </div>
       </div>
 
-      <!-- ===== SCENE 2 — the fix ===== -->
+      <!-- ===== SCENE 2 — resurface a past page by meaning ===== -->
       <div id="s2" class="scene">
         <div class="stage">
-          <div class="browser" id="s2-browser">
-            <div class="bbar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><div class="urlbar mono">chrome — handles assigned</div></div>
-            <div class="tabs">
-              <div class="beam" id="s2-beam"></div>
-              <div class="tab"><span class="chip s2chip">✓</span><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab"><span class="chip s2chip">✓</span><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab" id="s2-figma"><span class="chip s2chip">✓</span><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-              <div class="tab"><span class="chip s2chip">✓</span><span class="fav"></span><div class="lines"><div class="ln"></div><div class="ln s"></div></div></div>
-            </div>
+          <div class="hist" id="s2-hist">
+            <div class="histcap">your chrome history</div>
+            <div class="beam" id="s2-beam"></div>
+            <div class="histrow s2row">a news homepage <span class="ago">2h</span></div>
+            <div class="histrow s2row" id="s2-hit">Stratechery — Aggregation Theory <span class="ago">6d</span></div>
+            <div class="histrow s2row">a youtube video <span class="ago">3d</span></div>
+            <div class="histrow s2row">an amazon order <span class="ago">5d</span></div>
           </div>
-          <div class="term" id="s2-term">
+          <div class="term" id="s2-term" style="width: 600px;">
             <div class="who">▍your ai</div>
-            <div class="line"><span class="pr">&gt;</span> summarize the doc I'm reading</div>
-            <div class="line ok" id="s2-ok">→ done — here's the summary ✓</div>
+            <div class="line"><span class="pr">&gt;</span> pull up that Stratechery piece I read last week</div>
+            <div class="line ok" id="s2-ok">→ found it · reopened · summarized ✓</div>
           </div>
         </div>
-        <div class="packet" id="s2-packet"></div>
-        <div class="s2-text">
-          <div class="headline"><span class="accent" id="s2-head">Now it can.</span></div>
-        </div>
+        <div class="scene-cap"><div class="sub" id="s2-cap">Found by <b style="color:#4fe0b0">meaning</b> in your history — even after the tab is long gone.</div></div>
       </div>
 
-      <!-- ===== SCENE 3 — the range ===== -->
+      <!-- ===== SCENE 3 — your real, signed-in tabs, all at once ===== -->
       <div id="s3" class="scene">
-        <div class="range">
-          <div class="eyebrow" id="s3-eye">reads anything you have open</div>
-          <div class="fmts">
-            <div class="fmt s3fmt">HTML</div>
-            <div class="fmt s3fmt">Docs</div>
-            <div class="fmt s3fmt">Sheets</div>
-            <div class="fmt s3fmt">Figma</div>
-            <div class="fmt s3fmt">PDF</div>
-          </div>
-          <div class="demorow">
-            <div class="demo" id="s3-grep">
-              <div class="q"><span class="pr">find</span> "pricing"</div>
-              <div class="a">→ found in <b>2 of your tabs</b></div>
-            </div>
-            <div class="demo" id="s3-ask">
-              <div class="q"><span class="pr">ask</span> "what do my tabs say?"</div>
-              <div class="a">→ answered, <b>with sources</b></div>
+        <div class="stage">
+          <div class="browser" id="s3-browser">
+            <div class="bbar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><div class="urlbar mono">chrome — signed in</div></div>
+            <div class="tabs">
+              <div class="tab s3tab"><span class="fav"></span><span class="tname">Google Doc — the spec</span><span class="lock">🔒</span></div>
+              <div class="tab s3tab"><span class="fav"></span><span class="tname">the internal dashboard</span><span class="lock">🔒</span></div>
+              <div class="tab s3tab"><span class="fav"></span><span class="tname">a Figma board</span><span class="lock">🔒</span></div>
             </div>
           </div>
-          <div class="sub" id="s3-sub" style="text-align:center">Search and ask across every tab — past the login wall, a few hundred tokens.</div>
+          <div class="term" id="s3-term" style="width: 600px;">
+            <div class="who">▍your ai</div>
+            <div class="line"><span class="pr">&gt;</span> answer this from my open tabs</div>
+            <div class="line ok" id="s3-ok">→ answered, cited: Doc · Dashboard ✓</div>
+          </div>
         </div>
+        <div class="scene-cap"><div class="sub" id="s3-cap">Reads the browser you're already signed into — past the login, where other agents can't go.</div></div>
       </div>
 
       <!-- ===== SCENE 4 — CTA ===== -->
@@ -175,7 +164,8 @@
         <div class="cta">
           <div class="mark" id="s4-mark"><span>t·</span></div>
           <div class="word" id="s4-word">Handle</div>
-          <div class="ctatag" id="s4-tag">give your agent a handle on every open tab</div>
+          <div class="ctatag" id="s4-tag">Your whole Chrome, <span class="accent">one question away.</span></div>
+          <div class="meta" id="s4-meta">read-only · local · open source · works over MCP</div>
           <div class="cmd" id="s4-cmd">claude mcp add handle</div>
           <div class="url" id="s4-url">github.com/abhitsian/handle</div>
         </div>
@@ -187,45 +177,42 @@
       window.__timelines = window.__timelines || {};
       const tl = gsap.timeline({ paused: true });
 
-      /* ===== SCENE 1 (0–6.6) ===== */
-      tl.from("#s1-browser", { x: -80, opacity: 0, duration: 0.8, ease: "power3.out" }, 0.2);
-      tl.from(".s1tab", { x: -30, opacity: 0, duration: 0.5, stagger: 0.08, ease: "power2.out" }, 0.5);
-      tl.from("#s1-term", { x: 80, opacity: 0, duration: 0.8, ease: "power3.out" }, 0.5);
-      tl.from("#s1-bad", { opacity: 0, duration: 0.3, ease: "power1.in" }, 1.7);
-      tl.fromTo("#s1-bad", { x: -6 }, { x: 6, duration: 0.07, repeat: 5, yoyo: true, ease: "none" }, 1.7);
-      tl.from("#s1-eye", { y: 24, opacity: 0, duration: 0.5, ease: "power2.out" }, 2.2);
-      tl.from("#s1-head", { y: 50, opacity: 0, duration: 0.8, ease: "expo.out" }, 2.5);
+      /* ===== SCENE 1 (0–6.2) — the hook ===== */
+      tl.from("#s1-eye", { y: 24, opacity: 0, duration: 0.5, ease: "power2.out" }, 0.3);
+      tl.from("#s1-head", { y: 54, opacity: 0, duration: 0.85, ease: "expo.out" }, 0.6);
+      tl.from("#s1-term", { y: 60, opacity: 0, duration: 0.7, ease: "power3.out" }, 1.5);
+      tl.from(".s1th", { x: -24, opacity: 0, duration: 0.5, stagger: 0.45, ease: "power2.out" }, 2.4);
 
-      /* ===== → SCENE 2 (crossfade at 6.6) ===== */
-      tl.to("#s2", { opacity: 1, duration: 0.6, ease: "power2.inOut" }, 6.6);
-      tl.from("#s2-browser", { opacity: 0, duration: 0.5, ease: "power2.out" }, 6.6);
-      tl.from("#s2-term", { opacity: 0, duration: 0.5, ease: "power2.out" }, 6.6);
-      tl.fromTo(".s2chip", { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 0.45, stagger: 0.12, ease: "back.out(2)" }, 7.3);
-      tl.fromTo("#s2-beam", { opacity: 0, y: 0 }, { opacity: 1, duration: 0.25, ease: "power1.out" }, 8.4);
-      tl.to("#s2-beam", { y: 300, duration: 1.0, ease: "power1.inOut" }, 8.5);
-      tl.to("#s2-beam", { opacity: 0, duration: 0.25, ease: "power1.in" }, 9.4);
-      tl.fromTo("#s2-figma", { backgroundColor: "#0f1a22" }, { backgroundColor: "#0e201b", duration: 0.4, ease: "power2.out" }, 9.2);
-      tl.fromTo("#s2-packet", { opacity: 0, x: 0 }, { opacity: 1, duration: 0.2, ease: "power1.out" }, 9.7);
-      tl.to("#s2-packet", { x: 470, duration: 0.7, ease: "power2.inOut" }, 9.8);
-      tl.to("#s2-packet", { opacity: 0, duration: 0.2, ease: "power1.in" }, 10.5);
-      tl.from("#s2-ok", { opacity: 0, x: -12, duration: 0.4, ease: "power2.out" }, 10.6);
-      tl.fromTo("#s2-head", { opacity: 0, scale: 0.85 }, { opacity: 1, scale: 1, duration: 0.7, ease: "back.out(1.6)" }, 11.1);
+      /* ===== → SCENE 2 (crossfade at 6.2) — resurface by meaning ===== */
+      tl.to("#s2", { opacity: 1, duration: 0.6, ease: "power2.inOut" }, 6.2);
+      tl.from("#s2-term", { opacity: 0, x: 60, duration: 0.6, ease: "power3.out" }, 6.4);
+      tl.from("#s2-hist", { opacity: 0, x: -60, duration: 0.6, ease: "power3.out" }, 6.4);
+      tl.from(".s2row", { opacity: 0, y: 18, duration: 0.4, stagger: 0.1, ease: "power2.out" }, 6.9);
+      /* scan beam sweeps the history */
+      tl.fromTo("#s2-beam", { opacity: 0, y: 0 }, { opacity: 1, duration: 0.25, ease: "power1.out" }, 7.8);
+      tl.to("#s2-beam", { y: 250, duration: 1.1, ease: "power1.inOut" }, 7.9);
+      tl.to("#s2-beam", { opacity: 0, duration: 0.25, ease: "power1.in" }, 8.9);
+      /* the match lights up */
+      tl.to("#s2-hit", { backgroundColor: "#0e201b", borderColor: "#2c5247", color: "#e8edf0", duration: 0.4, ease: "power2.out" }, 8.7);
+      tl.from("#s2-ok", { opacity: 0, x: -12, duration: 0.45, ease: "power2.out" }, 9.4);
+      tl.from("#s2-cap", { opacity: 0, y: 20, duration: 0.5, ease: "power2.out" }, 10.0);
 
-      /* ===== → SCENE 3 (crossfade at 14.8) ===== */
-      tl.to("#s3", { opacity: 1, duration: 0.6, ease: "power2.inOut" }, 14.8);
-      tl.from("#s3-eye", { y: 24, opacity: 0, duration: 0.5, ease: "power2.out" }, 15.0);
-      tl.from(".s3fmt", { y: 30, opacity: 0, scale: 0.8, duration: 0.45, stagger: 0.1, ease: "back.out(1.8)" }, 15.3);
-      tl.from("#s3-grep", { y: 36, opacity: 0, duration: 0.55, ease: "power3.out" }, 16.4);
-      tl.from("#s3-ask", { y: 36, opacity: 0, duration: 0.55, ease: "expo.out" }, 16.8);
-      tl.from("#s3-sub", { y: 24, opacity: 0, duration: 0.5, ease: "power2.out" }, 17.6);
+      /* ===== → SCENE 3 (crossfade at 13.0) — signed-in tabs ===== */
+      tl.to("#s3", { opacity: 1, duration: 0.6, ease: "power2.inOut" }, 13.0);
+      tl.from("#s3-browser", { opacity: 0, x: -60, duration: 0.6, ease: "power3.out" }, 13.2);
+      tl.from("#s3-term", { opacity: 0, x: 60, duration: 0.6, ease: "power3.out" }, 13.2);
+      tl.from(".s3tab", { opacity: 0, y: 22, duration: 0.45, stagger: 0.13, ease: "back.out(1.7)" }, 13.7);
+      tl.from("#s3-ok", { opacity: 0, x: -12, duration: 0.45, ease: "power2.out" }, 15.2);
+      tl.from("#s3-cap", { opacity: 0, y: 20, duration: 0.5, ease: "power2.out" }, 15.9);
 
-      /* ===== → SCENE 4 (crossfade at 22.0) ===== */
-      tl.to("#s4", { opacity: 1, duration: 0.6, ease: "power2.inOut" }, 22.0);
-      tl.fromTo("#s4-mark", { opacity: 0, scale: 0.5, rotation: -8 }, { opacity: 1, scale: 1, rotation: 0, duration: 0.6, ease: "back.out(2)" }, 22.3);
-      tl.from("#s4-word", { y: 40, opacity: 0, duration: 0.6, ease: "expo.out" }, 22.7);
-      tl.from("#s4-tag", { y: 24, opacity: 0, duration: 0.5, ease: "power2.out" }, 23.1);
-      tl.from("#s4-cmd", { y: 24, opacity: 0, duration: 0.5, ease: "power3.out" }, 23.6);
-      tl.from("#s4-url", { opacity: 0, duration: 0.5, ease: "power1.out" }, 24.1);
+      /* ===== → SCENE 4 (crossfade at 20.8) — CTA ===== */
+      tl.to("#s4", { opacity: 1, duration: 0.6, ease: "power2.inOut" }, 20.8);
+      tl.fromTo("#s4-mark", { opacity: 0, scale: 0.5, rotation: -8 }, { opacity: 1, scale: 1, rotation: 0, duration: 0.6, ease: "back.out(2)" }, 21.1);
+      tl.from("#s4-word", { y: 40, opacity: 0, duration: 0.6, ease: "expo.out" }, 21.5);
+      tl.from("#s4-tag", { y: 26, opacity: 0, duration: 0.55, ease: "power3.out" }, 22.0);
+      tl.from("#s4-meta", { y: 20, opacity: 0, duration: 0.5, ease: "power2.out" }, 22.5);
+      tl.from("#s4-cmd", { y: 22, opacity: 0, duration: 0.5, ease: "power3.out" }, 22.9);
+      tl.from("#s4-url", { opacity: 0, duration: 0.5, ease: "power1.out" }, 23.4);
 
       window.__timelines["main"] = tl;
     </script>
