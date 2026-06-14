@@ -26,10 +26,25 @@ vision.
 | `read_tab` | read tab(s): HTML text / Markdown (`md`) / Google export / Figma·PDF·Office screenshot |
 | `screenshot_tab` | capture a tab as image(s) to read with vision (`full` for whole page) |
 | `active_tab` | the frontmost tab — "what I'm looking at" |
-| `open_tab` / `close_tab` / `note_tab` / `group_tab` / `pin_tab` / `refresh_tabs` | act on tabs |
+| `open_tab` / `close_tab` / `note_tab` / `group_tab` / `pin_tab` / `refresh_tabs` | act on tabs (`open_tab` also opens a raw URL) |
+| `history` | query Chrome history — titles + links, never content (`searches`, `closed` flags) |
+| `closed` | recently-closed tabs from the session file, real titles → `open_tab` the url |
+| `bookmarks` | search bookmarks |
+| `downloads` | recent downloads → local file paths |
+| `journeys` | Chrome's own topical clustering of browsing |
+| `most_visited` | most-visited pages |
+| `console` | console logs + errors for a tab (needs the extension) |
+| `ext_status` | Chrome-extension bridge status (the sturdier backend) |
 
 `read_tab` is format-aware: text where text exists (lossless, cheap), pixels
-where it doesn't (Figma, PDFs, Office — read with vision).
+where it doesn't (Figma, PDFs, Office — read with vision). It (and scan and
+screenshots) use the **Chrome extension** when connected and fall back to
+AppleScript otherwise.
+
+The `history`/`closed`/`bookmarks`/`downloads`/`journeys`/`most_visited` tools
+return **the pointer, never page content** — titles, links, file paths, search
+terms. To read a hit, `open_tab` its url (or read the local file). None of them
+touch Login Data, Cookies, or Web Data.
 
 ## Requirements
 

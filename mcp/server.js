@@ -131,6 +131,7 @@ function toolReadTab(a) {
   if (a.shot) args.push('--shot');
   if (a.full) args.push('--full');
   if (a.clipboard) args.push('--clipboard');
+  if (a.cdp) args.push('--cdp');
   if (a.chars != null) args.push('--chars', String(a.chars));
   return readPayloadsToContent(asArray(runTab(args, { json: true })));
 }
@@ -165,6 +166,55 @@ function toolNoteTab(a) { if (!a.ref || !a.text) throw new Error('ref and text a
 function toolGroupTab(a) { if (!a.ref || !a.name) throw new Error('ref and name are required'); return [{ type: 'text', text: runTab(['group', String(a.ref), String(a.name)]) }]; }
 function toolPinTab(a) { if (!a.ref) throw new Error('ref is required'); return [{ type: 'text', text: runTab([a.pin === false ? 'unpin' : 'pin', String(a.ref)]) }]; }
 function toolRefreshTabs() { return [{ type: 'text', text: runTab(['refresh']) }]; }
+
+// ---- Chrome's own data (pointer, not page content) ----
+function toolHistory(a) {
+  const args = ['history'];
+  if (a.query) args.push(String(a.query));
+  if (a.days != null) args.push('--days', String(a.days));
+  if (a.hours != null) args.push('--hours', String(a.hours));
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  if (a.closed) args.push('--closed');
+  if (a.searches) args.push('--searches');
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolBookmarks(a) {
+  const args = ['bookmarks'];
+  if (a.query) args.push(String(a.query));
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolDownloads(a) {
+  const args = ['downloads'];
+  if (a.query) args.push(String(a.query));
+  if (a.days != null) args.push('--days', String(a.days));
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolJourneys(a) {
+  const args = ['journeys'];
+  if (a.query) args.push(String(a.query));
+  if (a.days != null) args.push('--days', String(a.days));
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolTop(a) {
+  const args = ['top'];
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolClosed(a) {
+  const args = ['closed'];
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolConsole(a) {
+  if (!a.ref) throw new Error('ref is required');
+  const args = ['console', String(a.ref)];
+  if (a.ms != null) args.push('--ms', String(a.ms));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolExtStatus() { return [{ type: 'text', text: runTab(['ext']) }]; }
 
 const REF_DESC = 'A tab reference: a handle ("t7"), a bare number ("7"), "active" (the frontmost tab — what the user is looking at), or a fuzzy term matched against title/url/group/note ("figma", "the spec doc").';
 
@@ -253,6 +303,7 @@ const TOOLS = [
       shot: { type: 'boolean', description: 'Screenshot the tab instead of reading text (returns images).' },
       full: { type: 'boolean', description: 'With a screenshot: scroll and capture the whole page.' },
       clipboard: { type: 'boolean', description: 'Read the macOS clipboard instead — the user copies (⌘A ⌘C), you grab it. The reliable floor when in-page reads fail.' },
+      cdp: { type: 'boolean', description: 'Read via the opt-in DevTools Protocol (needs an existing --remote-debugging-port). The extension is the no-friction alternative.' },
       chars: { type: 'number', description: 'Max characters of text per tab.' },
     }, required: ['ref'] },
   },
@@ -282,8 +333,8 @@ const TOOLS = [
   },
   {
     name: 'open_tab',
-    description: 'Bring a tab to the front in Chrome.',
-    inputSchema: { type: 'object', properties: { ref: { type: 'string', description: REF_DESC } }, required: ['ref'] },
+    description: 'Bring a tab to the front in Chrome — or open a raw http(s)/file URL as a new tab (e.g. a url from history/closed/bookmarks/downloads).',
+    inputSchema: { type: 'object', properties: { ref: { type: 'string', description: REF_DESC + ' Or a raw http(s)://file:// URL to open as a new tab.' } }, required: ['ref'] },
   },
   {
     name: 'close_tab',
@@ -310,6 +361,84 @@ const TOOLS = [
     description: 'Re-scan Chrome into Handle\'s state (run if the user opened/closed tabs since the last scan).',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'history',
+    description:
+      'Query the user\'s Chrome history — titles + links, NEVER page content. The pointer to where they\'ve ' +
+      'been, so you can find a page they no longer have open. Give a keyword to prefilter and a wider --days ' +
+      'window, then filter the returned rows yourself by MEANING (the keyword just narrows the haystack). To ' +
+      'read a hit, open_tab its url then read_tab. closed:true drops still-open tabs ("find the tab I closed"); ' +
+      'searches:true returns omnibox search terms the user typed instead of pages.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', description: 'Keyword prefilter (every word must appear in title/url). Keep it broad.' },
+      days: { type: 'number', description: 'How far back to look (default 7).' },
+      hours: { type: 'number', description: 'Window in hours (overrides days).' },
+      limit: { type: 'number', description: 'Max rows (default 40).' },
+      closed: { type: 'boolean', description: 'Exclude currently-open tabs.' },
+      searches: { type: 'boolean', description: 'Return omnibox search terms instead of visited pages.' },
+    } },
+  },
+  {
+    name: 'closed',
+    description:
+      'Recently-closed tabs reconstructed from Chrome\'s session file, with their real titles — the precise ' +
+      '"reopen the tab I just closed". Returns titles + urls (not content); open_tab a url to bring it back.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'number', description: 'Max rows (default 40).' } } },
+  },
+  {
+    name: 'bookmarks',
+    description: 'Search the user\'s Chrome bookmarks (titles + links). Use for "open my bookmarked X" → then open_tab the url.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', description: 'Filter by title/url/folder.' },
+      limit: { type: 'number', description: 'Max rows (default 200).' },
+    } },
+  },
+  {
+    name: 'downloads',
+    description:
+      'Recent downloads resolved to LOCAL FILE PATHS (with a moved/deleted flag). Closes the download→reference ' +
+      'loop: "read the file I just downloaded" → find it here → read the returned path with your file reader.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', description: 'Filter by filename/source url.' },
+      days: { type: 'number', description: 'How far back (default 30).' },
+      limit: { type: 'number', description: 'Max rows (default 40).' },
+    } },
+  },
+  {
+    name: 'journeys',
+    description:
+      'Chrome\'s own ML clustering of the user\'s browsing into topical sessions (a ready-made research trail). ' +
+      'Each journey is a label + the pages in it. Use for "pull up my research on X" without re-deriving clusters.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', description: 'Filter by keyword/url.' },
+      days: { type: 'number', description: 'How far back (default 30).' },
+      limit: { type: 'number', description: 'Max journeys (default 25).' },
+    } },
+  },
+  {
+    name: 'most_visited',
+    description: 'The user\'s most-visited pages by Chrome\'s own ranking — "what sites do I live in".',
+    inputSchema: { type: 'object', properties: { limit: { type: 'number', description: 'Max rows (default 25).' } } },
+  },
+  {
+    name: 'console',
+    description:
+      'Console logs + errors for a tab — "what\'s broken on this page". Needs the Handle Chrome extension ' +
+      'connected (it uses chrome.debugger); if it isn\'t, the result says how to set it up. Captures output ' +
+      'AFTER attach, so to catch load-time errors the user should reload the tab first.',
+    inputSchema: { type: 'object', properties: {
+      ref: { type: 'string', description: REF_DESC },
+      ms: { type: 'number', description: 'Capture window in ms (default 1800).' },
+    }, required: ['ref'] },
+  },
+  {
+    name: 'ext_status',
+    description:
+      'Status of the Handle Chrome-extension bridge — the sturdier backend (permission-free scan, native tab ' +
+      'groups, race-free screenshots, console). Reports connected/not, and if not, how to install it. Reads/' +
+      'scans/screenshots prefer the extension automatically when connected and fall back to AppleScript otherwise.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 const HANDLERS = {
@@ -319,6 +448,8 @@ const HANDLERS = {
   read_tab: toolReadTab, screenshot_tab: toolScreenshotTab, active_tab: toolActiveTab,
   open_tab: toolOpenTab, close_tab: toolCloseTab, note_tab: toolNoteTab,
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,
+  history: toolHistory, closed: toolClosed, bookmarks: toolBookmarks, downloads: toolDownloads,
+  journeys: toolJourneys, most_visited: toolTop, console: toolConsole, ext_status: toolExtStatus,
 };
 
 // ---------- JSON-RPC / MCP stdio loop ----------
