@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Handle — give your agent a handle on every open tab</title>
-<meta property="og:title" content="Handle — give your agent a handle on every open tab">
-<meta property="og:description" content="Every open Chrome tab gets a stable handle your Claude Code session can reference and read — pull a tab's live content past login walls, grep across what's open, act on it. Your browser becomes context your agent can see.">
+<title>Handle — let your AI read the tabs you have open</title>
+<meta property="og:title" content="Handle — let your AI read the tabs you have open">
+<meta property="og:description" content="Stop copy-pasting pages into your AI. Handle lets your AI assistant read what you already have open in your browser — the doc you're reading, the work files behind your login, designs and PDFs — just by asking for it in plain words.">
 <meta name="theme-color" content="#0a0f14">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1620'/%3E%3Crect x='6' y='9' width='20' height='15' rx='3' fill='none' stroke='%234fe0b0' stroke-width='1.6'/%3E%3Crect x='9' y='6' width='9' height='6' rx='2' fill='%234fe0b0'/%3E%3Ctext x='16' y='20.5' font-family='monospace' font-size='8' fill='%234fe0b0' text-anchor='middle' font-weight='700'%3Et7%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -176,6 +176,29 @@
     overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.5); background:#000; }
   .video-wrap video { width:100%; display:block; }
 
+  /* ---- BEFORE / AFTER ---- */
+  .beforeafter { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:26px; }
+  @media (max-width:720px){ .beforeafter { grid-template-columns:1fr; } }
+  .ba-col { border:1px solid var(--line); border-radius:14px; padding:24px 26px; }
+  .ba-before { background:rgba(255,107,107,.04); border-color:rgba(255,107,107,.18); }
+  .ba-after { background:rgba(79,224,176,.05); border-color:rgba(79,224,176,.22); }
+  .ba-h { font-family:"JetBrains Mono",monospace; font-size:12.5px; letter-spacing:.06em; text-transform:uppercase; margin-bottom:14px; }
+  .ba-before .ba-h { color:#ff8c8c; }
+  .ba-after .ba-h { color:var(--mint); }
+  .ba-col ul { list-style:none; display:flex; flex-direction:column; gap:11px; }
+  .ba-col li { color:var(--ink-soft); font-size:14.5px; line-height:1.5; padding-left:24px; position:relative; }
+  .ba-before li::before { content:"✕"; position:absolute; left:0; color:#ff8c8c; }
+  .ba-after li::before { content:"✓"; position:absolute; left:0; color:var(--mint); }
+  .ba-col li b { color:var(--ink); } .ba-col li em { color:var(--mint-soft); font-style:normal; }
+
+  /* ---- "just say it" ---- */
+  .say { margin-top:26px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:24px 28px; }
+  .say-h { font-size:15px; color:var(--ink); font-weight:600; margin-bottom:16px; }
+  .say ul { list-style:none; display:grid; grid-template-columns:1fr 1fr; gap:13px 28px; }
+  @media (max-width:680px){ .say ul { grid-template-columns:1fr; } }
+  .say li { font-family:"JetBrains Mono",monospace; font-size:14.5px; color:var(--mint-soft); padding-left:22px; position:relative; }
+  .say li::before { content:"›"; position:absolute; left:0; color:var(--mint); }
+
   /* reveal-on-scroll */
   .reveal { opacity:0; transform:translateY(18px); transition:opacity .6s ease, transform .6s ease; }
   .reveal.in { opacity:1; transform:none; }
@@ -238,7 +261,7 @@
       <div class="mark"><span>t·</span></div>
       <div>
         <div class="brand-name">Handle</div>
-        <div class="brand-tag">give your agent a handle on every open tab</div>
+        <div class="brand-tag">let your AI read the tabs you have open</div>
       </div>
     </div>
     <div class="top-cta">
@@ -250,9 +273,9 @@
   <!-- HERO -->
   <section class="hero">
     <div class="hero-text">
-      <div class="eyebrow">for Claude Code · macOS · Chrome · open source</div>
-      <h1 class="headline">Your agent can't read your <span class="accent">logged-in</span> tabs. Now it can.</h1>
-      <p class="lede"><b>Stop copy-pasting pages into chat.</b> When you work in Claude Code, the tabs you have open <b>are</b> the task — the spec, the Figma, the doc you're logged into — and your agent can't see any of it. Handle gives every open Chrome tab a <b>stable handle</b> (<code>t1</code>, <code>t2</code>…) your session can read: live, logged-in content, past the auth walls and JavaScript that defeat a plain fetch. Say <em>"read the figma tab"</em> and it's in the conversation — no copy, no paste, no losing it on a refresh.</p>
+      <div class="eyebrow">stop copy-pasting into your AI</div>
+      <h1 class="headline">Your AI can't read the tabs you have open. <span class="accent">Now it can.</span></h1>
+      <p class="lede">You've got the spec, the doc, the dashboard open in your browser. To get any of it into your AI assistant, you copy and paste — one page at a time. <b>Handle lets your AI read what's already on your screen</b> — even the work documents behind your company login. Ask it to <em>"summarize the doc I'm reading"</em> and it does, without you copying a thing.</p>
       <div class="cta-row">
         <a href="#install" class="btn btn-primary">Use it ↓</a>
         <a href="https://github.com/abhitsian/handle" target="_blank" rel="noopener" class="btn btn-ghost">View on GitHub →</a>
@@ -291,53 +314,60 @@
 
   <!-- THE GAP -->
   <section class="section reveal">
-    <h2>You already do this by hand</h2>
-    <p class="sub">The real way you get a logged-in page into your agent today is <b>⌘A, ⌘C, paste</b> — manual, one tab at a time, dragging in nav chrome, gone the moment the page refreshes. Handle is that, automated and addressable. (The agent-browser tools solve a different problem: they <em>drive</em> a logged-out browser of their own; none just read the real tabs <em>you</em> already have open.)</p>
-    <div class="cmp">
-      <table>
-        <thead>
-          <tr><th></th><th class="us">Handle</th><th>Copy-paste<br>into chat</th><th>WebFetch</th><th>Playwright MCP</th><th>Claude&nbsp;in&nbsp;Chrome</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Reads your real, logged-in tabs</td><td class="us y">✓</td><td class="y">✓ by hand</td><td class="n">✗ logged out</td><td class="n">✗ own browser</td><td class="y">✓</td></tr>
-          <tr><td>The agent gets it — no manual copy</td><td class="us y">✓</td><td class="n">✗ you copy each one</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td>Reference a tab by name / "what I'm looking at"</td><td class="us y">✓ t1 · active</td><td class="n">✗ find, switch, copy</td><td class="n">—</td><td class="n">✗</td><td class="p">~</td></tr>
-          <tr><td>Read &amp; compare many tabs at once (grep · ask)</td><td class="us y">✓</td><td class="n">✗ one at a time</td><td class="n">✗</td><td class="n">✗</td><td class="p">~ loses focus past ~5</td></tr>
-          <tr><td>Clean structured text (Markdown, nav stripped)</td><td class="us y">✓</td><td class="n">✗ dumps nav chrome</td><td class="p">~</td><td class="n">✗ 50k-token trees</td><td class="p">~</td></tr>
-          <tr><td>Low token cost</td><td class="us y">✓ just the text</td><td class="p">~ paste-everything</td><td class="y">✓</td><td class="n">✗ heavy</td><td class="p">~</td></tr>
-        </tbody>
-      </table>
+    <h2>Right now, you're the copy-paste machine</h2>
+    <p class="sub">When you want your AI to use something you're looking at, you do it by hand — and it barely works.</p>
+    <div class="beforeafter">
+      <div class="ba-col ba-before">
+        <div class="ba-h">Today — copy &amp; paste</div>
+        <ul>
+          <li>Switch to the tab, select all, copy, paste — for every page.</li>
+          <li>One page at a time. Six tabs means six trips.</li>
+          <li>You paste the menus and clutter along with the content.</li>
+          <li>It's gone the moment the page changes.</li>
+          <li>Work docs behind a login, designs, PDFs — you're stuck.</li>
+        </ul>
+      </div>
+      <div class="ba-col ba-after">
+        <div class="ba-h">With Handle</div>
+        <ul>
+          <li>Just say <em>"read the doc I'm looking at."</em> It's done.</li>
+          <li>Point at several tabs at once and ask across all of them.</li>
+          <li>It pulls the clean content — no menus, no clutter.</li>
+          <li>It stays put — nothing to copy, nothing to lose.</li>
+          <li>Reads your <b>work documents behind your login</b>, designs, PDFs.</li>
+        </ul>
+      </div>
     </div>
   </section>
 
   <!-- WHAT IT DOES -->
   <section class="section reveal">
-    <h2>What it does</h2>
-    <p class="sub">A small CLI (<code>tab</code>) and a <code>/tabs</code> skill let your session reference, read, and act on the tabs you already have open — by number, by name, or by "what I'm looking at."</p>
+    <h2>What you can finally do</h2>
+    <p class="sub">Whatever you have open, your AI can read it — in plain language, no copy-paste, even the documents behind your work login.</p>
     <div class="features">
       <div class="feature">
-        <h3><span class="ic">🔖</span> Stable handles</h3>
-        <p>Every open tab gets a short handle — <code>t1</code>, <code>t2</code> — that survives refreshes. Say "read t7" or "summarize the figma tab" instead of copy-pasting a long URL. The same handle names the tab on the board and in your session.</p>
+        <h3><span class="ic">📄</span> Use the doc you're reading</h3>
+        <p>"Summarize this 40-page spec." "What are the open questions in this doc?" "Pull the action items out of this thread." Ask about whatever's on your screen — it reads the whole thing so you don't have to.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">📖</span> Read past the login wall</h3>
-        <p>The headline. <code>read</code> pulls a tab's live, rendered text from your already-authenticated browser — the logged-in SharePoint doc, the Figma page, the gated newsletter — and extracts the main article, dropping nav and footer chrome. Add <code>--md</code> to get it back as clean <b>Markdown</b> — headings, lists, links, tables intact — ready to drop in as context.</p>
+        <h3><span class="ic">🔒</span> Use your work documents</h3>
+        <p>The Google Doc, the SharePoint file, the internal wiki, the dashboard behind your company sign-in. Your AI reads them the same way you do — already logged in — instead of hitting a login screen.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">🔍</span> Grep what's open</h3>
-        <p>Search the actual on-page content of every tab, not just titles. "Which tab mentions the pricing change?" returns the handles, with excerpts. Find by what you read, not what you remember calling it.</p>
+        <h3><span class="ic">🎨</span> Designs, PDFs and sheets too</h3>
+        <p>"What does this Figma show?" "Pull the numbers from this PDF." "What's in this budget sheet?" The visual things your AI usually can't open, it now can.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">📑</span> Pull a cluster in one call</h3>
-        <p>Hand several tabs to one <code>read t29 t30 t4</code> and the whole working set lands in context at once — the three articles, the spec, and the competitor page, ready to synthesize.</p>
+        <h3><span class="ic">🔎</span> Across everything you've got open</h3>
+        <p>"Answer this from the six articles I have open." "Which of my tabs talked about pricing?" It reads and compares all of them at once — and tells you which page each answer came from.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">👁️</span> "What am I looking at?"</h3>
-        <p><code>read active</code> grabs the frontmost tab — the page on your screen right now — so you can ask about it without naming it. The agent sees what you see.</p>
+        <h3><span class="ic">🗣️</span> Just say what you mean</h3>
+        <p>Refer to a tab the way you'd say it out loud — "the figma one," "the doc I'm looking at," "what's on my screen." No URLs, no codes. It figures out which one.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">🗂️</span> A board, too</h3>
-        <p>A local board clusters your tabs into the tasks they belong to, flags the ones gone stale (untouched 3+ days), and shows each tab's handle — so you remember what you started and can hand any of it to the agent.</p>
+        <h3><span class="ic">📌</span> Keep your research</h3>
+        <p>Save the set of pages you were working through, and pull them back days later — even after the tabs are long closed — so your AI can pick up where you left off.</p>
       </div>
     </div>
   </section>
@@ -345,10 +375,10 @@
   <!-- THE LOOP -->
   <section class="section reveal">
     <h2>How it works</h2>
-    <p class="sub">Handle calls no AI API of its own. It reads your real Chrome locally; your Claude Code session does the thinking. One shared file of handles is all the board and the agent need.</p>
+    <p class="sub">Three steps, and you only do the first one. Handle reads what's on your screen, right on your computer — your AI does the thinking.</p>
 
     <div class="diagram">
-      <svg viewBox="0 0 980 360" role="img" aria-label="How Handle works: your Chrome tabs get a handle, Handle reads them format-aware, your agent uses the content.">
+      <svg viewBox="0 0 980 320" role="img" aria-label="How Handle works: you point at a tab, Handle reads it, your AI uses it.">
         <defs>
           <linearGradient id="node" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" stop-color="#13202a"/><stop offset="1" stop-color="#0d161d"/>
@@ -358,113 +388,97 @@
           </marker>
         </defs>
 
-        <!-- flow lines (drawn first, behind nodes) -->
         <line x1="266" y1="120" x2="356" y2="120" stroke="#2c4a42" stroke-width="2" marker-end="url(#arrow)"/>
         <line x1="624" y1="120" x2="714" y2="120" stroke="#2c4a42" stroke-width="2" marker-end="url(#arrow)"/>
         <circle r="4.5" fill="#4fe0b0"><animate attributeName="cx" values="266;356" dur="1.8s" repeatCount="indefinite"/><animate attributeName="cy" values="120;120" dur="1.8s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" dur="1.8s" repeatCount="indefinite"/></circle>
         <circle r="4.5" fill="#4fe0b0"><animate attributeName="cx" values="624;714" dur="1.8s" begin="0.9s" repeatCount="indefinite"/><animate attributeName="cy" values="120;120" dur="1.8s" begin="0.9s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;1;1;0" dur="1.8s" begin="0.9s" repeatCount="indefinite"/></circle>
-        <text x="311" y="110" text-anchor="middle" class="d-cap">a handle</text>
-        <text x="669" y="110" text-anchor="middle" class="d-cap">its content</text>
+        <text x="311" y="110" text-anchor="middle" class="d-cap">you point</text>
+        <text x="669" y="110" text-anchor="middle" class="d-cap">it reads</text>
 
-        <!-- 1 · Your Chrome -->
+        <!-- 1 · You -->
         <g>
           <rect x="20" y="40" width="246" height="160" rx="14" fill="url(#node)" stroke="#22323d"/>
-          <text x="40" y="68" class="d-kicker">01 · YOUR CHROME</text>
-          <text x="40" y="90" class="d-title">Open tabs</text>
-          <g class="d-tab"><rect x="40" y="104" width="60" height="20" rx="5"/><text x="52" y="118" class="d-chip">t1</text><rect x="106" y="110" width="130" height="8" rx="4" class="d-bar"/></g>
-          <g class="d-tab"><rect x="40" y="132" width="60" height="20" rx="5"/><text x="52" y="146" class="d-chip">t2</text><rect x="106" y="138" width="110" height="8" rx="4" class="d-bar"/></g>
-          <g class="d-tab"><rect x="40" y="160" width="60" height="20" rx="5"/><text x="52" y="174" class="d-chip">t3</text><rect x="106" y="166" width="124" height="8" rx="4" class="d-bar"/></g>
+          <text x="40" y="68" class="d-kicker">01 · YOU</text>
+          <text x="40" y="92" class="d-title">Point at a tab</text>
+          <text x="40" y="124" class="d-line">"the doc I'm reading"</text>
+          <text x="40" y="150" class="d-line">"the figma one"</text>
+          <text x="40" y="176" class="d-line">"what's on my screen"</text>
         </g>
 
         <!-- 2 · Handle -->
         <g>
           <rect x="356" y="40" width="268" height="160" rx="14" fill="url(#node)" stroke="#2c5247"/>
           <text x="376" y="68" class="d-kicker" fill="#4fe0b0">02 · HANDLE</text>
-          <text x="376" y="90" class="d-title">Name it &amp; read it</text>
-          <text x="376" y="116" class="d-line"><tspan class="d-mint">name</tspan> — "the figma tab", t3, active</text>
-          <text x="376" y="140" class="d-line"><tspan class="d-mint">read</tspan> — live, logged-in, format-aware:</text>
-          <text x="392" y="160" class="d-sub">html → text / markdown</text>
-          <text x="392" y="176" class="d-sub">docs · sheets → export</text>
-          <text x="392" y="192" class="d-sub">figma · pdf · office → screenshot → 👁</text>
+          <text x="376" y="92" class="d-title">Reads it for you</text>
+          <text x="376" y="124" class="d-line">the page you're reading</text>
+          <text x="376" y="150" class="d-line">docs behind your login</text>
+          <text x="376" y="176" class="d-line">designs · PDFs · sheets</text>
         </g>
 
-        <!-- 3 · Claude Code -->
+        <!-- 3 · Your AI -->
         <g>
           <rect x="714" y="40" width="246" height="160" rx="14" fill="url(#node)" stroke="#22323d"/>
-          <text x="734" y="68" class="d-kicker">03 · CLAUDE CODE</text>
-          <text x="734" y="90" class="d-title">Works with it</text>
-          <text x="734" y="120" class="d-mono">&gt; summarize the figma tab</text>
-          <text x="734" y="142" class="d-mono" fill="#4fe0b0">→ reads tab t3</text>
-          <text x="734" y="170" class="d-sub">summarize · task · compare ·</text>
-          <text x="734" y="186" class="d-sub">ingest — whatever the session can do</text>
+          <text x="734" y="68" class="d-kicker">03 · YOUR AI</text>
+          <text x="734" y="92" class="d-title">Uses it</text>
+          <text x="734" y="124" class="d-line">summarize it</text>
+          <text x="734" y="150" class="d-line">answer questions on it</text>
+          <text x="734" y="176" class="d-line">compare it across tabs</text>
         </g>
 
-        <!-- footnote -->
-        <text x="490" y="250" text-anchor="middle" class="d-foot">No API key. Handle reads pixels &amp; text locally; the agent does the thinking.</text>
-        <text x="490" y="272" text-anchor="middle" class="d-foot">Same handle <tspan class="d-mint">t3</tspan> on the board and in the session — and the same tools over MCP.</text>
+        <text x="490" y="248" text-anchor="middle" class="d-foot">Runs on your computer. It reads what you already have open —</text>
+        <text x="490" y="270" text-anchor="middle" class="d-foot">your AI does the rest. Nothing copied, nothing sent anywhere else.</text>
       </svg>
     </div>
 
     <div class="loop">
-      <div class="lstep"><div class="k">01 · reference</div><h4>Name the tab</h4><p>You point at a tab the way you'd say it out loud — "the figma tab," "tab 7," "what I'm looking at." Handle resolves it to a stable handle.</p></div>
-      <div class="lstep"><div class="k">02 · read</div><h4>Pull the content</h4><p>It runs JavaScript inside that live tab to extract the rendered text — logged in, past the wall — for a few hundred tokens. Cached by default; <code>--live</code> for a fresh full page; <code>--md</code> to get clean <b>Markdown</b> (headings, lists, links, tables) for use as context.</p></div>
-      <div class="lstep"><div class="k">03 · act</div><h4>Work with it</h4><p>The text is in the conversation. Summarize it, turn it into a task, compare it across tabs, ingest it — whatever the session's skills and tools can do.</p></div>
+      <div class="lstep"><div class="k">01 · point</div><h4>Point at a tab</h4><p>Say it the way you'd say it out loud — "the doc I'm reading," "the figma one," "what's on my screen." No URLs, no codes.</p></div>
+      <div class="lstep"><div class="k">02 · read</div><h4>It reads it</h4><p>Handle pulls the real content off that page — even your work documents behind a login — and hands it over clean, without the menus and clutter.</p></div>
+      <div class="lstep"><div class="k">03 · use</div><h4>Your AI uses it</h4><p>Now it's in the conversation. Summarize it, ask questions about it, compare it across tabs, turn it into a task — whatever you'd do next.</p></div>
     </div>
-    <pre><button class="copy" onclick="copyCode(this)">copy</button><code><span class="c"># in any Claude Code session — say it in plain English, or run tab directly</span>
-<span class="cmd">tab list</span>                  <span class="c"># every open tab: handle · group · staleness</span>
-<span class="cmd">tab grep</span> <span class="h">"fable pricing"</span>     <span class="c"># search the on-page content of every tab</span>
-<span class="cmd">tab read active</span>           <span class="c"># the tab you're looking at, right now</span>
-<span class="cmd">tab read t3</span>                <span class="c"># cached &amp; instant</span>
-<span class="cmd">tab read t29 t30 t4</span>        <span class="c"># a whole cluster in one call</span>
-<span class="cmd">tab read t3 --live</span>         <span class="c"># fresh full page, nav stripped</span>
-<span class="cmd">tab read t3 --md</span>           <span class="c"># convert to clean Markdown — headings, lists, links, tables</span></code></pre>
-  </section>
 
-  <!-- MCP -->
-  <section class="section reveal">
-    <h2>Or plug it into any agent — as an MCP</h2>
-    <p class="sub">Handle ships as a local <b>MCP server</b>, so any MCP client — Claude Code, Claude Desktop, another agent — can read your tabs as first-class tools, no skill files or paths to wire up. It runs on your machine and reads your Chrome; it never exposes anyone else's tabs.</p>
-    <pre><button class="copy" onclick="copyCode(this)">copy</button><code><span class="c"># register the local server with Claude Code</span>
-claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js</code></pre>
-    <div class="features" style="margin-top:22px;">
-      <div class="feature"><h3><span class="ic">🧰</span> Tools, not stdout</h3><p>Seventeen tools — <code>list_tabs</code>, <code>find_tab</code>, <code>grep_tabs</code>, <code>ask_tabs</code>, <code>read_tab</code>, <code>screenshot_tab</code>, <code>save_tabs</code>, <code>recall_bundle</code>, and the rest. The agent calls them directly; no shell, no parsing.</p></div>
-      <div class="feature"><h3><span class="ic">🖼️</span> Screenshots inline</h3><p><code>read_tab</code> on a Figma or PDF returns the capture as an <b>inline image</b> the model reads with vision — the catch-all, delivered over the protocol.</p></div>
-      <div class="feature"><h3><span class="ic">📦</span> Zero-dependency Node</h3><p>A thin wrapper over the same Python engine. Speaks MCP over stdio, no npm install. Same family as <code>sessions-mcp</code>.</p></div>
+    <div class="say">
+      <div class="say-h">You just say it, in plain English:</div>
+      <ul>
+        <li>"Summarize the doc I'm looking at."</li>
+        <li>"What does the figma show?"</li>
+        <li>"Answer this from the articles I have open."</li>
+        <li>"Which of my tabs talked about pricing?"</li>
+      </ul>
     </div>
   </section>
 
-  <!-- INSTALL -->
+  <!-- SET IT UP -->
   <section class="section reveal" id="install">
-    <h2>Use it</h2>
-    <p class="sub">macOS + Google Chrome. Pure Python standard library — no dependencies, no API key. The agent side runs through your existing Claude Code session.</p>
+    <h2>Set it up once</h2>
+    <p class="sub">You'll need macOS, Google Chrome, and an AI assistant you already use (like Claude Code). It's free and open source, runs entirely on your own computer — no account, no API key. It reads your tabs; it never sends them anywhere, and it can't touch anyone else's.</p>
     <div class="install-grid">
       <div class="install-step">
         <span class="n">1</span>
         <div>
-          <h4>Clone it</h4>
+          <h4>Get it</h4>
           <pre><button class="copy" onclick="copyCode(this)">copy</button><code>git clone https://github.com/abhitsian/handle.git ~/claude-apps/handle</code></pre>
         </div>
       </div>
       <div class="install-step">
         <span class="n">2</span>
         <div>
-          <h4>Let Chrome read its own pages</h4>
-          <p>Enable <b>Chrome → View → Developer → Allow JavaScript from Apple Events</b>. This is what lets <code>read</code> pull a tab's live, logged-in content. First run also asks for Automation permission — allow it.</p>
+          <h4>Connect it to your AI</h4>
+          <p>One line, and your assistant can read your tabs:</p>
+          <pre><button class="copy" onclick="copyCode(this)">copy</button><code>claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js</code></pre>
         </div>
       </div>
       <div class="install-step">
         <span class="n">3</span>
         <div>
-          <h4>Reference your tabs from Claude Code</h4>
-          <p>Drop the <code>/tabs</code> skill in <code>~/.claude/skills/</code> (included) and just talk: <i>"what am I looking at?"</i>, <i>"summarize the figma tab,"</i> <i>"which tab mentions the migration?"</i> Or call the CLI yourself with <code>python3 tab.py …</code></p>
+          <h4>Let it see your pages</h4>
+          <p>The first time, your Mac and Chrome will ask permission for Handle to read your open tabs — say yes. That's what lets it read what you're looking at, including the pages behind your work login.</p>
         </div>
       </div>
       <div class="install-step">
         <span class="n">4</span>
         <div>
-          <h4>Open the board (optional)</h4>
-          <pre><button class="copy" onclick="copyCode(this)">copy</button><code>cd ~/claude-apps/handle && python3 app.py
-<span class="c"># → http://localhost:4910</span></code></pre>
+          <h4>Just talk to it</h4>
+          <p><i>"Summarize the doc I'm looking at."</i> &nbsp; <i>"What does the figma show?"</i> &nbsp; <i>"Answer this from my open tabs."</i> &nbsp; That's the whole thing.</p>
         </div>
       </div>
     </div>
