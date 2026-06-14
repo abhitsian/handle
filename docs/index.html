@@ -171,6 +171,11 @@
   .d-tab .d-bar { fill:#22323d; }
   .d-foot { font-family:"Space Grotesk",sans-serif; font-size:11.5px; fill:var(--ink-faint); }
 
+  /* ---- LAUNCH VIDEO ---- */
+  .video-wrap { max-width:1000px; margin:0 auto; border:1px solid var(--line); border-radius:16px;
+    overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.5); background:#000; }
+  .video-wrap video { width:100%; display:block; }
+
   /* reveal-on-scroll */
   .reveal { opacity:0; transform:translateY(18px); transition:opacity .6s ease, transform .6s ease; }
   .reveal.in { opacity:1; transform:none; }
@@ -245,9 +250,9 @@
   <!-- HERO -->
   <section class="hero">
     <div class="hero-text">
-      <div class="eyebrow">macOS · Chrome · MCP · open source</div>
-      <h1 class="headline">Your browser is context. Give your <span class="accent">agent</span> a handle on it.</h1>
-      <p class="lede">When you work in Claude Code, the tabs you have open <b>are</b> the task — the spec, the Figma, the Notion page, the docs you're logged into. Your agent can't see any of it. Handle gives every open Chrome tab a <b>stable handle</b> (<code>t1</code>, <code>t2</code>…) your session can reference, and a <code>read</code> that pulls the tab's <b>live, logged-in content</b> straight into the conversation — past the login walls and JavaScript that defeat a plain fetch.</p>
+      <div class="eyebrow">for Claude Code · macOS · Chrome · open source</div>
+      <h1 class="headline">Your agent can't read your <span class="accent">logged-in</span> tabs. Now it can.</h1>
+      <p class="lede"><b>Stop copy-pasting pages into chat.</b> When you work in Claude Code, the tabs you have open <b>are</b> the task — the spec, the Figma, the doc you're logged into — and your agent can't see any of it. Handle gives every open Chrome tab a <b>stable handle</b> (<code>t1</code>, <code>t2</code>…) your session can read: live, logged-in content, past the auth walls and JavaScript that defeat a plain fetch. Say <em>"read the figma tab"</em> and it's in the conversation — no copy, no paste, no losing it on a refresh.</p>
       <div class="cta-row">
         <a href="#install" class="btn btn-primary">Use it ↓</a>
         <a href="https://github.com/abhitsian/handle" target="_blank" rel="noopener" class="btn btn-ghost">View on GitHub →</a>
@@ -277,21 +282,29 @@
     </div>
   </section>
 
+  <!-- LAUNCH VIDEO -->
+  <section class="section reveal" style="margin-top:clamp(36px,5vw,64px)">
+    <div class="video-wrap">
+      <video src="handle-launch.mp4" poster="handle-launch-poster.png" controls muted playsinline preload="metadata"></video>
+    </div>
+  </section>
+
   <!-- THE GAP -->
   <section class="section reveal">
-    <h2>The agent is blind to your browser</h2>
-    <p class="sub">Every browser tool for Claude Code drives a browser the agent controls — its own session, logged out, expensive to read. None of them treat the real, logged-in tabs <em>you</em> curated as something the agent can simply reference and read. That's the gap Handle fills.</p>
+    <h2>You already do this by hand</h2>
+    <p class="sub">The real way you get a logged-in page into your agent today is <b>⌘A, ⌘C, paste</b> — manual, one tab at a time, dragging in nav chrome, gone the moment the page refreshes. Handle is that, automated and addressable. (The agent-browser tools solve a different problem: they <em>drive</em> a logged-out browser of their own; none just read the real tabs <em>you</em> already have open.)</p>
     <div class="cmp">
       <table>
         <thead>
-          <tr><th></th><th class="us">Handle</th><th>WebFetch</th><th>Playwright MCP</th><th>Claude in Chrome</th></tr>
+          <tr><th></th><th class="us">Handle</th><th>Copy-paste<br>into chat</th><th>WebFetch</th><th>Playwright MCP</th><th>Claude&nbsp;in&nbsp;Chrome</th></tr>
         </thead>
         <tbody>
-          <tr><td>Reads your real, logged-in tabs</td><td class="us y">✓</td><td class="n">✗ logged out</td><td class="n">✗ own browser</td><td class="y">✓</td></tr>
-          <tr><td>Gets through login walls &amp; JS shells</td><td class="us y">✓</td><td class="n">✗</td><td class="p">~ heavy</td><td class="y">✓</td></tr>
-          <tr><td>Low token cost</td><td class="us y">✓ just the text</td><td class="y">✓</td><td class="n">✗ 50k-token trees</td><td class="p">~</td></tr>
-          <tr><td>Reference a tab by a stable handle</td><td class="us y">✓ t1, t2…</td><td class="n">—</td><td class="n">✗</td><td class="n">✗</td></tr>
-          <tr><td>No automation session to spin up</td><td class="us y">✓ read-only</td><td class="y">✓</td><td class="n">✗</td><td class="n">✗</td></tr>
+          <tr><td>Reads your real, logged-in tabs</td><td class="us y">✓</td><td class="y">✓ by hand</td><td class="n">✗ logged out</td><td class="n">✗ own browser</td><td class="y">✓</td></tr>
+          <tr><td>The agent gets it — no manual copy</td><td class="us y">✓</td><td class="n">✗ you copy each one</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><td>Reference a tab by name / "what I'm looking at"</td><td class="us y">✓ t1 · active</td><td class="n">✗ find, switch, copy</td><td class="n">—</td><td class="n">✗</td><td class="p">~</td></tr>
+          <tr><td>Read &amp; compare many tabs at once (grep · ask)</td><td class="us y">✓</td><td class="n">✗ one at a time</td><td class="n">✗</td><td class="n">✗</td><td class="p">~ loses focus past ~5</td></tr>
+          <tr><td>Clean structured text (Markdown, nav stripped)</td><td class="us y">✓</td><td class="n">✗ dumps nav chrome</td><td class="p">~</td><td class="n">✗ 50k-token trees</td><td class="p">~</td></tr>
+          <tr><td>Low token cost</td><td class="us y">✓ just the text</td><td class="p">~ paste-everything</td><td class="y">✓</td><td class="n">✗ heavy</td><td class="p">~</td></tr>
         </tbody>
       </table>
     </div>
@@ -414,7 +427,7 @@
     <pre><button class="copy" onclick="copyCode(this)">copy</button><code><span class="c"># register the local server with Claude Code</span>
 claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js</code></pre>
     <div class="features" style="margin-top:22px;">
-      <div class="feature"><h3><span class="ic">🧰</span> Tools, not stdout</h3><p>Twelve tools — <code>list_tabs</code>, <code>find_tab</code>, <code>grep_tabs</code>, <code>read_tab</code>, <code>screenshot_tab</code>, <code>active_tab</code>, and the actions. The agent calls them directly; no shell, no parsing.</p></div>
+      <div class="feature"><h3><span class="ic">🧰</span> Tools, not stdout</h3><p>Seventeen tools — <code>list_tabs</code>, <code>find_tab</code>, <code>grep_tabs</code>, <code>ask_tabs</code>, <code>read_tab</code>, <code>screenshot_tab</code>, <code>save_tabs</code>, <code>recall_bundle</code>, and the rest. The agent calls them directly; no shell, no parsing.</p></div>
       <div class="feature"><h3><span class="ic">🖼️</span> Screenshots inline</h3><p><code>read_tab</code> on a Figma or PDF returns the capture as an <b>inline image</b> the model reads with vision — the catch-all, delivered over the protocol.</p></div>
       <div class="feature"><h3><span class="ic">📦</span> Zero-dependency Node</h3><p>A thin wrapper over the same Python engine. Speaks MCP over stdio, no npm install. Same family as <code>sessions-mcp</code>.</p></div>
     </div>

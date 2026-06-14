@@ -7,3 +7,7 @@ __pycache__/
 workspaces.json
 shots/
 bundles/
+launch-video/node_modules/
+launch-video/renders/
+launch-video/snapshots/
+launch-video/.hyperframes/
