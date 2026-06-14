@@ -176,11 +176,47 @@ def evaluate(ws_url: str, expression: str) -> str | None:
         ws.close()
 
 
-def screenshot(ws_url: str) -> bytes | None:
-    """Full-viewport PNG bytes via Page.captureScreenshot."""
-    ws = _WS(ws_url)
+# Scroll the whole page (triggering lazy/scroll-reveal content), nudge common
+# reveal-on-scroll patterns visible, then return to top — so a full-page capture
+# isn't blank below the fold. Awaited as a promise via Runtime.evaluate.
+_REVEAL_SCROLL_JS = """new Promise((resolve)=>{
+  try { document.querySelectorAll('.reveal,[data-reveal]').forEach(e=>e.classList.add('in')); } catch(e){}
+  let y=0; const vh=window.innerHeight||900; let steps=0;
+  const tick=()=>{
+    window.scrollTo(0,y); y+=vh; steps++;
+    if (y < document.documentElement.scrollHeight && steps < 80) { setTimeout(tick, 55); }
+    else { setTimeout(()=>{ window.scrollTo(0,0); setTimeout(resolve, 180); }, 120); }
+  };
+  tick();
+})"""
+
+
+def screenshot(ws_url: str, full: bool = False) -> bytes | None:
+    """PNG bytes via Page.captureScreenshot.
+
+    full=False captures the viewport. full=True scrolls the page first (so
+    lazy/scroll-reveal sections render), measures the real content size, and
+    captures the entire page in one shot.
+    """
+    ws = _WS(ws_url, timeout=25.0)
     try:
-        resp = ws.call("Page.captureScreenshot", {"format": "png"})
+        if not full:
+            resp = ws.call("Page.captureScreenshot", {"format": "png"})
+            data = resp.get("result", {}).get("data")
+            return base64.b64decode(data) if data else None
+        ws.call("Runtime.enable")
+        try:
+            ws.call("Runtime.evaluate",
+                    {"expression": _REVEAL_SCROLL_JS, "awaitPromise": True, "returnByValue": True})
+        except Exception:
+            pass  # capture what we can even if the scroll script misbehaves
+        params = {"format": "png", "captureBeyondViewport": True}
+        m = ws.call("Page.getLayoutMetrics").get("result", {})
+        cs = m.get("cssContentSize") or m.get("contentSize") or {}
+        w, h = int(cs.get("width", 0)), int(cs.get("height", 0))
+        if w and h:
+            params["clip"] = {"x": 0, "y": 0, "width": w, "height": h, "scale": 1}
+        resp = ws.call("Page.captureScreenshot", params)
         data = resp.get("result", {}).get("data")
         return base64.b64decode(data) if data else None
     finally:

@@ -100,6 +100,45 @@ def _ext_screenshot(tab: dict) -> list[str] | None:
         return None
     return [str(path)]
 
+
+def _cdp_shot(tab: dict, args) -> list[str] | None:
+    """Capture a tab via the DevTools Protocol (race-free, bound to the page
+    target — never grabs the wrong window). --full does a scroll-then-capture
+    of the whole page. Needs Chrome on --remote-debugging-port."""
+    port = getattr(args, "port", cdp.DEFAULT_PORT)
+    tgt = cdp.target_for_url(tab["url"], port=port)
+    if not tgt:
+        return None
+    try:
+        png = cdp.screenshot(tgt["webSocketDebuggerUrl"], full=getattr(args, "full", False))
+    except Exception:
+        return None
+    if not png:
+        return None
+    collect.SHOTS_DIR.mkdir(exist_ok=True)
+    key = re.sub(r"[^a-zA-Z0-9]", "", tab.get("id", "cdp"))[:12] or "cdp"
+    path = collect.SHOTS_DIR / f"{key}-cdp.png"
+    try:
+        path.write_bytes(png)
+    except Exception:
+        return None
+    return [str(path)]
+
+
+def _capture_shots(tab: dict, args):
+    """Screenshot a tab, best backend first → (shots, source, err).
+    CDP (if --cdp) → extension (if connected, race-free) → AppleScript floor."""
+    if getattr(args, "cdp", False):
+        shots = _cdp_shot(tab, args)
+        if shots:
+            return shots, "cdp", ""
+    if tab.get("ext_tab_id") is not None and _ext_alive():
+        shots = _ext_screenshot(tab)
+        if shots:
+            return shots, "extension", ""
+    shots, err = collect.screenshot_tab(tab["url"], full=getattr(args, "full", False))
+    return shots, "applescript", err
+
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
 DEDUCTIONS_PATH = APP_DIR / "deductions.json"
@@ -399,11 +438,8 @@ def _screenshot_payload(tab: dict, kind: str, args) -> dict:
     vision. The only path for Figma/PDF/Office (no DOM text), and forced by
     --shot for anything visual."""
     base = {"id": tab["id"], "title": tab["title"], "url": tab["url"], "kind": kind}
-    # extension screenshot is race-free (background tabs, no focus dance)
-    shots = _ext_screenshot(tab) if tab.get("ext_tab_id") is not None and _ext_alive() else None
-    err = ""
-    if not shots:
-        shots, err = collect.screenshot_tab(tab["url"], full=getattr(args, "full", False))
+    # CDP / extension screenshots are race-free (background tabs, no focus dance)
+    shots, _src, err = _capture_shots(tab, args)
     p = {**base, "source": "screenshot", "chars": 0, "content": "", "shots": shots, "note": ""}
     if kind == "figma":
         p.update(_figma_ref(tab["url"]))
@@ -562,10 +598,10 @@ def cmd_shot(args) -> None:
     for anything the DOM can't give you (Figma, PDFs, Office, charts)."""
     tabs = load_tabs()
     tab = resolve_one(args.ref, tabs)
-    shots, err = collect.screenshot_tab(tab["url"], full=args.full)
+    shots, source, err = _capture_shots(tab, args)
     if args.json:
         print(json.dumps({"id": tab["id"], "title": tab["title"], "url": tab["url"],
-                          "shots": shots, "error": err}, indent=2, ensure_ascii=False))
+                          "shots": shots, "source": source, "error": err}, indent=2, ensure_ascii=False))
         return
     if not shots:
         print(f"Could not screenshot {tab['id']}  {tab['title']}\n({err})")
@@ -1267,6 +1303,9 @@ def build_parser() -> argparse.ArgumentParser:
     ssh = sub.add_parser("shot", help="screenshot a tab for the agent to read with vision")
     ssh.add_argument("ref")
     ssh.add_argument("--full", action="store_true", help="scroll and capture the whole page")
+    ssh.add_argument("--cdp", action="store_true",
+                     help="capture via the DevTools Protocol (race-free; needs --remote-debugging-port)")
+    ssh.add_argument("--port", type=int, default=cdp.DEFAULT_PORT, help="CDP debug port (default 9222)")
     ssh.add_argument("--json", action="store_true")
     ssh.set_defaults(func=cmd_shot)
 
