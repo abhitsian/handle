@@ -2,24 +2,42 @@
 
 **[🔗 Live site →](https://abhitsian.github.io/handle/)**
 
-**Let your AI coding agent read the Chrome you're already signed into.** Handle
-gives your agent your real, logged-in browser as **read-only context** — the
-tabs you have open (past the login wall), and the trail behind them (history,
-closed tabs, bookmarks, downloads). The other tools that touch the web
-(browser-use, Browserbase, ChatGPT's agent) spin up a *fresh, signed-out*
-browser; Handle reads the one you actually work in.
+**Your whole Chrome, one question away — for your AI agent.** Handle makes your
+browser queryable in plain language: the signed-in tabs you have open, **and
+everything behind them** — your history, the pages you closed, bookmarks,
+downloads — searched by meaning, not keywords. Two things nothing else does:
 
-Every open tab gets a **stable handle** (`t1`, `t2`…) you reference from a Claude
-Code session — read its live content, search across what's open, ask a question
-across all of it (cited), save research for later. There's also a board: tabs
-grouped into the tasks they belong to, pinned, and flagged when they go
-**stale**. The same handle (`t49`) names the tab on the board and in your session.
+1. **Live & signed-in.** It reads the real, logged-in pages you work in — the
+   Google Doc, the Notion page, the dashboard. The other tools that touch the
+   web (browser-use, Browserbase, ChatGPT's agent) spin up a *fresh, signed-out*
+   browser; Handle reads the one you actually use.
+2. **Historical & whole-Chrome.** Your browsing becomes agent-queryable: *"pull
+   up that Stratechery piece I read last week,"* *"what did I work on today?"*,
+   *"reopen the doc I closed this morning."* Chrome's own history can't search by
+   meaning; agentic-browser tools don't touch your history at all.
 
-Ships three ways: a **CLI** (`tab`), a **board** (localhost:4910), and an **MCP
-server** ([`mcp/`](mcp/), 25 tools) so any agent uses it as first-class tools —
-`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. Local,
-read-only, no API key, open source. It reads *your* Chrome — it never drives the
-page, and never exposes anyone else's tabs.
+It only ever **reads** — never clicks, types, or drives the page. Read-only,
+local, no API key, open source.
+
+A quick taste (you say it in plain English; the agent runs the tools):
+
+| You say | What happens |
+|---|---|
+| "Summarize the Google Doc I'm looking at" | reads your signed-in page, past the login |
+| "What did I work on today?" | reads your history back as themes |
+| "Pull up that TechCrunch article I read last week" | finds it in history by meaning → reopens → reads |
+| "Answer this from the six tabs I have open" | reads all six, answers cited by tab |
+| "Reopen the doc I closed this morning" | recovers it from the session, reopens it |
+| "What errors are on this page?" | console logs/errors (via the extension) |
+
+Every open tab also gets a **stable handle** (`t1`, `t2`…) you reference from a
+Claude Code session, and there's a board (localhost:4910) that shows the same
+handles, grouped into tasks and flagged when **stale**.
+
+Ships three ways: a **CLI** (`tab`), a **board**, and an **MCP server**
+([`mcp/`](mcp/), 25 tools) so any agent uses it as first-class tools —
+`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. It reads
+*your* Chrome — it never drives the page, and never exposes anyone else's tabs.
 
 ## From Claude Code
 

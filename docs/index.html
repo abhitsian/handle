@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Handle — let your AI read the Chrome you're already signed into</title>
+<title>Handle — your whole Chrome, readable by your AI agent</title>
 <meta property="og:title" content="Handle — let your AI read the tabs you have open">
 <meta property="og:description" content="Stop copy-pasting pages into your AI. Handle lets your AI assistant read what you already have open in your browser — the doc you're reading, the work files behind your login, designs and PDFs — just by asking for it in plain words.">
 <meta name="theme-color" content="#0a0f14">
@@ -296,9 +296,9 @@
   <!-- HERO -->
   <section class="hero">
     <div class="hero-text">
-      <div class="eyebrow">browser context for your AI coding agent</div>
-      <h1 class="headline">Your AI can't read the tabs you have open. <span class="accent">Now it can.</span></h1>
-      <p class="lede">You've got the spec, the doc, the dashboard open — behind your work login. The other AI tools that touch the web open their own fresh, signed-out browser, so none of it is visible to them. <b>Handle lets your agent read the Chrome you're already signed into</b> — the tabs you have open and the trail behind them — in plain language, no copy-paste.</p>
+      <div class="eyebrow">your chrome, readable by your agent</div>
+      <h1 class="headline">Your whole Chrome, <span class="accent">one question away.</span></h1>
+      <p class="lede">Your AI reads the signed-in tabs you have open <b>and everything behind them</b> — your history, downloads, the pages you closed — searched by meaning, not keywords, in plain language. Ask it <em>"what did I work on today?"</em> or <em>"pull up that article I read last week"</em> and it actually can.</p>
       <p class="hero-meta">Works as an <b>MCP server</b> (25 tools), a CLI, and a board. Local, read-only, no API key, open source.</p>
       <div class="cta-row">
         <a href="#install" class="btn btn-primary">Use it ↓</a>
@@ -338,27 +338,27 @@
 
   <!-- THE GAP -->
   <section class="section reveal">
-    <h2>Right now, you're the copy-paste machine</h2>
-    <p class="sub">When you want your AI to use something you're looking at, you do it by hand — and it barely works.</p>
+    <h2>Your browser knows everything. Nothing can use it.</h2>
+    <p class="sub">Your browser is the highest-fidelity record of your work and attention — every doc, dashboard, article and design you've touched. Yet your AI can't see any of it, and Chrome itself can barely search it.</p>
     <div class="beforeafter">
       <div class="ba-col ba-before">
-        <div class="ba-h">Today — copy &amp; paste</div>
+        <div class="ba-h">Today — locked away</div>
         <ul>
-          <li>Switch to the tab, select all, copy, paste — for every page.</li>
-          <li>One page at a time. Six tabs means six trips.</li>
-          <li>You paste the menus and clutter along with the content.</li>
-          <li>It's gone the moment the page changes.</li>
-          <li>Work docs behind a login, designs, PDFs — you're stuck.</li>
+          <li>Your AI can't read the page in front of you — you copy-paste it in, one tab at a time.</li>
+          <li>It's blind to anything behind a login — your docs, dashboards, work tools.</li>
+          <li>Chrome's history is a keyword-and-time list — no searching by what a page was <em>about</em>.</li>
+          <li>The article you read last week, the tab you closed an hour ago — gone unless you remember the title.</li>
+          <li>Nothing can answer "what was I working on yesterday?"</li>
         </ul>
       </div>
       <div class="ba-col ba-after">
         <div class="ba-h">With Handle</div>
         <ul>
-          <li>Just say <em>"read the doc I'm looking at."</em> It's done.</li>
-          <li>Point at several tabs at once and ask across all of them.</li>
-          <li>It pulls the clean content — no menus, no clutter.</li>
-          <li>It stays put — nothing to copy, nothing to lose.</li>
-          <li>Reads your <b>work documents behind your login</b>, designs, PDFs.</li>
+          <li>Your AI reads what's on your screen — just say <em>"use the doc I'm looking at."</em></li>
+          <li>It reads your <b>signed-in</b> pages — the Google Doc, the dashboard, the SharePoint file.</li>
+          <li>It searches your history by <b>meaning</b> — <em>"that pricing article I read last week."</em></li>
+          <li>It reopens what you closed and pulls back the page you forgot the name of.</li>
+          <li>Ask <em>"what did I work on today?"</em> — and it tells you.</li>
         </ul>
       </div>
     </div>
@@ -367,35 +367,39 @@
   <!-- WHAT IT DOES -->
   <section class="section reveal">
     <h2>What you can finally do</h2>
-    <p class="sub">Whatever you have open, your AI can read it — in plain language, no copy-paste, even the documents behind your work login.</p>
+    <p class="sub">Everything in your Chrome becomes something your AI can use — what you have open right now, and the whole trail behind it.</p>
     <div class="features">
       <div class="feature">
-        <h3><span class="ic">📄</span> Use the doc you're reading</h3>
-        <p>"Summarize this 40-page spec." "What are the open questions in this doc?" "Pull the action items out of this thread." Ask about whatever's on your screen — it reads the whole thing so you don't have to.</p>
+        <h3><span class="ic">🕰️</span> Resurface anything you've seen</h3>
+        <p>"Pull up that Stratechery piece on aggregation theory and summarize the argument." "Find the TechCrunch article about that funding round I read last week." "Reopen the doc I closed this morning." Even when the tab is long gone, Handle finds it in your history <b>by meaning</b> and brings it back — something Chrome's own history can't do.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">📅</span> Ask your browser about your day</h3>
+        <p>"What did I work on today?" "What have I been reading this week?" "How much time did I spend in docs vs. research?" Chrome stores all of it but can only show you a keyword-and-time list. Handle reads it back as <b>themes</b>, in plain language.</p>
       </div>
       <div class="feature">
         <h3><span class="ic">🔒</span> Your real browser, not a sandbox</h3>
-        <p>Most AI tools that "use the web" — <b>ChatGPT's agent</b>, or developer browser tools like <b>Playwright</b> and <b>Browserbase</b> — open their own fresh browser, signed out of everything, so your real work is invisible to them. Handle reads the tabs <b>you're actually using</b>, in your own browser, already signed in. If you can see it, it can read it — the Google Doc, the SharePoint file, the internal dashboard. And it only ever <b>reads</b>: it doesn't click, type, or drive the page. You point, it reads. That's the trade — give up the robot that browses for you, get the one that can actually see your work.</p>
+        <p>Most AI tools that "use the web" — <b>ChatGPT's agent</b>, or developer tools like <b>Playwright</b> and <b>Browserbase</b> — open their own fresh browser, signed out of everything, so your real work is invisible to them. Handle reads the pages <b>you're actually signed into</b> — the Google Doc, the Notion page, the internal dashboard. And it only ever <b>reads</b>: it never clicks, types, or drives the page. You point, it reads. Give up the robot that browses for you, get the one that can actually see your work.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">🎨</span> Designs, PDFs and sheets too</h3>
-        <p>"What does this Figma show?" "Pull the numbers from this PDF." "What's in this budget sheet?" The visual things your AI usually can't open, it now can.</p>
+        <h3><span class="ic">🔎</span> Reason across everything open</h3>
+        <p>"Answer this from the six tabs I have open." "Compare these three pricing pages." "Which of my tabs mentioned the security review?" It reads and weighs all of them at once — and tells you which tab each answer came from.</p>
       </div>
       <div class="feature">
-        <h3><span class="ic">🔎</span> Across everything you've got open</h3>
-        <p>"Answer this from the six articles I have open." "Which of my tabs talked about pricing?" It reads and compares all of them at once — and tells you which page each answer came from.</p>
+        <h3><span class="ic">↩️</span> Pick up where you left off</h3>
+        <p>"Restore last night's research session." "What was I in the middle of on the planning doc?" Handle reopens the cluster of pages you were working through and hands your AI the thread — even days later.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">🎨</span> Designs, PDFs and downloads</h3>
+        <p>"What does this Figma show?" "Pull the numbers from this PDF." "Read the spec I just downloaded." Designs and PDFs are read as images; downloads resolve to the actual file — the things your AI usually can't open, it now can.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="ic">🛠️</span> Built for coding agents</h3>
+        <p>Point your agent at a tab to read a logged-in web app, grab the <b>console errors</b> off a page that's misbehaving, or screenshot a background tab. Plugs into any agent as an <b>MCP server</b> — 25 tools, local, read-only.</p>
       </div>
       <div class="feature">
         <h3><span class="ic">🗣️</span> Just say what you mean</h3>
-        <p>Refer to a tab the way you'd say it out loud — "the figma one," "the doc I'm looking at," "what's on my screen." No URLs, no codes. It figures out which one.</p>
-      </div>
-      <div class="feature">
-        <h3><span class="ic">📌</span> Keep your research</h3>
-        <p>Save the set of pages you were working through, and pull them back days later — even after the tabs are long closed — so your AI can pick up where you left off.</p>
-      </div>
-      <div class="feature">
-        <h3><span class="ic">🕰️</span> Even the tab you already closed</h3>
-        <p>"Reopen the doc I closed this morning." "Find that article I was reading last week." "Where's the file I downloaded for the budget?" It reaches into your own browser history, bookmarks and downloads — in plain language — and brings the page back.</p>
+        <p>Refer to things the way you'd say them out loud — "the figma one," "what's on my screen," "that TechCrunch article from yesterday." No URLs, no codes. Handle figures out which one.</p>
       </div>
     </div>
   </section>
@@ -427,10 +431,10 @@
         <g>
           <rect x="20" y="40" width="246" height="160" rx="14" fill="url(#node)" stroke="#22323d"/>
           <text x="40" y="68" class="d-kicker">01 · YOU</text>
-          <text x="40" y="92" class="d-title">Point at a tab</text>
+          <text x="40" y="92" class="d-title">Point, or ask</text>
           <text x="40" y="124" class="d-line">"the doc I'm reading"</text>
-          <text x="40" y="150" class="d-line">"the figma one"</text>
-          <text x="40" y="176" class="d-line">"what's on my screen"</text>
+          <text x="40" y="150" class="d-line">"what did I do today?"</text>
+          <text x="40" y="176" class="d-line">"that article last week"</text>
         </g>
 
         <!-- 2 · Handle -->
@@ -438,9 +442,9 @@
           <rect x="356" y="40" width="268" height="160" rx="14" fill="url(#node)" stroke="#2c5247"/>
           <text x="376" y="68" class="d-kicker" fill="#4fe0b0">02 · HANDLE</text>
           <text x="376" y="92" class="d-title">Reads it for you</text>
-          <text x="376" y="124" class="d-line">the page you're reading</text>
-          <text x="376" y="150" class="d-line">docs behind your login</text>
-          <text x="376" y="176" class="d-line">designs · PDFs · sheets</text>
+          <text x="376" y="124" class="d-line">tabs &amp; pages behind logins</text>
+          <text x="376" y="150" class="d-line">history · closed tabs</text>
+          <text x="376" y="176" class="d-line">designs · PDFs · downloads</text>
         </g>
 
         <!-- 3 · Your AI -->
@@ -453,24 +457,24 @@
           <text x="734" y="176" class="d-line">compare it across tabs</text>
         </g>
 
-        <text x="490" y="248" text-anchor="middle" class="d-foot">Runs on your computer. It reads what you already have open —</text>
+        <text x="490" y="248" text-anchor="middle" class="d-foot">Runs on your computer. It reads what you have open and what you've looked at —</text>
         <text x="490" y="270" text-anchor="middle" class="d-foot">your AI does the rest. Nothing copied, nothing sent anywhere else.</text>
       </svg>
     </div>
 
     <div class="loop">
-      <div class="lstep"><div class="k">01 · point</div><h4>Point at a tab</h4><p>Say it the way you'd say it out loud — "the doc I'm reading," "the figma one," "what's on my screen." No URLs, no codes.</p></div>
-      <div class="lstep"><div class="k">02 · read</div><h4>It reads it</h4><p>Handle pulls the real content off that page — even your work documents behind a login — and hands it over clean, without the menus and clutter.</p></div>
-      <div class="lstep"><div class="k">03 · use</div><h4>Your AI uses it</h4><p>Now it's in the conversation. Summarize it, ask questions about it, compare it across tabs, turn it into a task — whatever you'd do next.</p></div>
+      <div class="lstep"><div class="k">01 · ask</div><h4>Point, or just ask</h4><p>Name a tab the way you'd say it out loud — "the doc I'm reading," "the figma one" — or ask about your browsing: "what did I read about pricing last week?"</p></div>
+      <div class="lstep"><div class="k">02 · read</div><h4>Handle finds it &amp; reads it</h4><p>It locates the page — open, or buried in your history — and pulls the real content, even behind a login, clean and without the clutter.</p></div>
+      <div class="lstep"><div class="k">03 · use</div><h4>Your AI uses it</h4><p>Now it's in the conversation. Summarize it, answer from it, compare it across tabs, turn it into a task — whatever you'd do next.</p></div>
     </div>
 
     <div class="say">
       <div class="say-h">You just say it, in plain English:</div>
       <ul>
-        <li>"Summarize the doc I'm looking at."</li>
-        <li>"What does the figma show?"</li>
-        <li>"Answer this from the articles I have open."</li>
-        <li>"Which of my tabs talked about pricing?"</li>
+        <li>"Summarize the Google Doc I'm looking at."</li>
+        <li>"What did I work on today?"</li>
+        <li>"Pull up that Stratechery piece I read last week."</li>
+        <li>"Answer this from the tabs I have open."</li>
       </ul>
     </div>
   </section>
