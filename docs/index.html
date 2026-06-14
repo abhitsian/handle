@@ -199,6 +199,27 @@
   .say li { font-family:"JetBrains Mono",monospace; font-size:14.5px; color:var(--mint-soft); padding-left:22px; position:relative; }
   .say li::before { content:"›"; position:absolute; left:0; color:var(--mint); }
 
+  /* ---- UNDER THE HOOD ---- */
+  .tokenbar { margin-top:24px; display:flex; flex-direction:column; gap:18px; max-width:820px; }
+  .tb-top { display:flex; justify-content:space-between; align-items:baseline; gap:14px; margin-bottom:8px; }
+  .tb-label { font-size:14px; color:var(--ink-soft); }
+  .tb-val { font-family:"JetBrains Mono",monospace; font-size:14px; color:var(--ink); white-space:nowrap; }
+  .tb-track { height:20px; border-radius:10px; background:var(--panel-2); border:1px solid var(--line); overflow:hidden; }
+  .tb-fill { height:100%; border-radius:10px; }
+  .tb-big { background:#3a4654; }
+  .tb-small { background:linear-gradient(90deg,#4fe0b0,#86f0d0); box-shadow:0 0 18px rgba(79,224,176,.45); }
+  .tb-note { margin-top:16px; color:var(--ink-soft); font-size:14.5px; max-width:60em; }
+  .ladder { list-style:none; margin:26px 0 0; padding:0; }
+  .ladder li { position:relative; padding:0 0 26px 60px; margin-left:20px; border-left:2px solid var(--line); }
+  .ladder li:last-child { border-left-color:transparent; padding-bottom:0; }
+  .ladder li::before { counter-increment:l; content:counter(l); position:absolute; left:-18px; top:-2px;
+    width:34px; height:34px; border-radius:50%; background:var(--panel-2); border:1px solid var(--line);
+    color:var(--mint); font-family:"JetBrains Mono",monospace; font-weight:700; font-size:14px;
+    display:flex; align-items:center; justify-content:center; }
+  .ladder { counter-reset:l; }
+  .ladder b { color:var(--ink); font-size:16px; }
+  .ladder .ld-d { color:var(--ink-soft); font-size:14.5px; line-height:1.55; margin-top:5px; display:block; }
+
   /* reveal-on-scroll */
   .reveal { opacity:0; transform:translateY(18px); transition:opacity .6s ease, transform .6s ease; }
   .reveal.in { opacity:1; transform:none; }
@@ -445,6 +466,33 @@
         <li>"Which of my tabs talked about pricing?"</li>
       </ul>
     </div>
+  </section>
+
+  <!-- UNDER THE HOOD -->
+  <section class="section reveal">
+    <h2>Under the hood: why it stays light</h2>
+    <p class="sub">Other tools hand your AI the <em>whole raw page</em> — all the markup, menus and scripts, or a giant behind-the-scenes "map" of the page. That's enormous and mostly noise. Handle pulls out only the part you'd actually read and hands over clean, tidy text (Markdown). Same page, a tiny fraction of the size.</p>
+    <div class="tokenbar">
+      <div>
+        <div class="tb-top"><span class="tb-label">Other tools — the raw page</span><span class="tb-val">~50,000 words of code</span></div>
+        <div class="tb-track"><div class="tb-fill tb-big" style="width:100%"></div></div>
+      </div>
+      <div>
+        <div class="tb-top"><span class="tb-label">Handle — just the content, tidied up</span><span class="tb-val">~800</span></div>
+        <div class="tb-track"><div class="tb-fill tb-small" style="width:2.5%"></div></div>
+      </div>
+    </div>
+    <p class="tb-note">A typical page, give or take — roughly <b style="color:var(--mint)">95%+ less</b> for your AI to chew on. Cheaper, faster, and it reads the real content instead of wading through menus and code (which is also where AI tools get confused).</p>
+
+    <h3 style="margin-top:50px; font-size:21px;">How it actually gets the content</h3>
+    <p class="sub">Behind one plain <em>"read the tab,"</em> Handle tries the cleanest, cheapest way first — and only drops to the next if it has to. You always get usable content, or a clear reason why not.</p>
+    <ol class="ladder">
+      <li><b>A snapshot it already has</b><span class="ld-d">If it captured the page a moment ago, it reuses that — instant, nothing to re-fetch.</span></li>
+      <li><b>The live page — content only</b><span class="ld-d">Reads the page and keeps just the article: headings, lists, links, tables, turned into clean Markdown. The menus, ads and footer are dropped.</span></li>
+      <li><b>The document's own copy</b><span class="ld-d">For Google Docs &amp; Sheets, and Word files on SharePoint, it pulls the real document — straight from your signed-in session — as tidy text or a table.</span></li>
+      <li><b>A picture, read with vision</b><span class="ld-d">For designs, PDFs, or anything with no readable text, it takes a screenshot and your AI reads the image.</span></li>
+      <li><b>Your clipboard</b><span class="ld-d">Last resort — you copy the page, it grabs what's on your clipboard. There's always a way through.</span></li>
+    </ol>
   </section>
 
   <!-- SET IT UP -->
