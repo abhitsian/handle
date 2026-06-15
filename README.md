@@ -41,6 +41,12 @@ Ships three ways: a **CLI** (`tab`), a **board**, and an **MCP server**
 
 ## From Claude Code
 
+> **The MCP server is the install** — `claude mcp add handle …` above gives any
+> agent the 25 tools as first-class functions; just talk to it. The `tab` CLI
+> and `/tabs` skill below are the *optional* local driving surface (handy if you
+> want to invoke it yourself, or wire it into your own skills). You don't need
+> the skill for the MCP path to work.
+
 The `tab` CLI (`tab.py`) is the agent surface; the `/tabs` skill drives it from
 any session, so you can just say "summarize the figma tab" or "what am I
 looking at."
