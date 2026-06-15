@@ -123,6 +123,33 @@ touch Login Data, Cookies, or Web Data.
 `tab open` now accepts a raw `http(s)://`/`file://` URL too, so anything these
 surface can be reopened as a new tab.
 
+## Under the hood — why it keeps working
+
+One idea runs through the whole design: **read your real, logged-in Chrome — and
+always have a backup way in.**
+
+Programs are walled off from your browser by design, so Handle keeps **three
+different doors** into Chrome and tries them best-first, degrading the moment one
+isn't available:
+
+1. **The extension** *(preferred)* — a helper inside Chrome itself. Permission-free,
+   sees your real tabs and groups, takes race-free screenshots, even wakes a
+   *discarded* tab before reading it.
+2. **AppleScript** *(fallback floor)* — asks macOS to relay to Chrome. Always
+   present, zero install; clumsier (toggle-gated JS, needs the tab frontmost).
+3. **DevTools / CDP** *(opt-in)* — a debug port you open deliberately; most
+   precise, race-free.
+
+Because every live read is this cascade, a read almost never just fails — if the
+best door is locked, it walks to the next. (That's exactly why Word docs read
+fine even with the "Allow JavaScript from Apple Events" toggle off.)
+
+Once it's in, Handle matches the method to the content — clean article text for
+web pages, the document's own file for Google/Office docs, and a **screenshot
+read with vision** for designs, PDFs, and slides that have no text to grab.
+Separately, it reads **copies** of Chrome's own history/downloads databases —
+read-only, pointers only. Nothing here ever writes, clicks, or types.
+
 ## Sturdier backends — the extension & CDP
 
 The default read path is **AppleScript** (zero install). Two optional backends

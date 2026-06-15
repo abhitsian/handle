@@ -527,6 +527,28 @@
     </ol>
   </section>
 
+  <!-- THE CLEVER PART -->
+  <section class="section reveal">
+    <h2>The clever part: it reads your <em>real</em> browser</h2>
+    <p class="sub">Most "AI that browses" tools open a fresh, robot-controlled Chrome that's signed into nothing — a stranger to your actual work. Handle does the opposite: it reads the browser <em>you're</em> already logged into. Programs are walled off from your browser by design, so Handle keeps <b>several ways in</b> and tries the smoothest one first, quietly dropping to the next if it isn't available.</p>
+    <ol class="ladder">
+      <li><b>The browser add-on — preferred</b><span class="ld-d">A quiet helper inside Chrome itself. No fuss, sees your real tabs and groups, takes clean screenshots, and even wakes a tab that fell asleep before reading it.</span></li>
+      <li><b>The built-in messenger — always there</b><span class="ld-d">Asks your Mac to relay to Chrome. Nothing to install, so it's the floor that's always available — just a little clumsier.</span></li>
+      <li><b>The developer hatch — opt-in</b><span class="ld-d">A precise back-channel you unlock on purpose. Most exact, and it never grabs the wrong window.</span></li>
+    </ol>
+    <p class="tb-note">Because it always has a backup way in, a read almost never just fails — if the best door is locked, it uses the next. <b style="color:var(--mint)">That's the whole trick.</b></p>
+
+    <h3 style="margin-top:50px; font-size:21px;">What makes it different</h3>
+    <p class="sub">Five things, in one breath:</p>
+    <ol class="ladder">
+      <li><b>Your real, signed-in browser</b><span class="ld-d">It sees what's behind your logins — not a stranger's empty Chrome.</span></li>
+      <li><b>Several ways in, tried best-first</b><span class="ld-d">No single point of failure; it degrades gracefully instead of breaking.</span></li>
+      <li><b>A picture as a fallback</b><span class="ld-d">Even a design or PDF with no text is still readable — your AI looks at a screenshot.</span></li>
+      <li><b>It reads your browser's own memory</b><span class="ld-d">History, downloads, closed tabs — not just what's open right now.</span></li>
+      <li><b>It only ever looks</b><span class="ld-d">Never clicks, types, or buys — and it all stays on your machine.</span></li>
+    </ol>
+  </section>
+
   <!-- EXAMPLES -->
   <section class="section reveal">
     <h2>Just say it — examples</h2>
