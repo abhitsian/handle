@@ -619,7 +619,7 @@
   <!-- SET IT UP -->
   <section class="section reveal" id="install">
     <h2>Set it up once</h2>
-    <p class="sub">You'll need macOS, Google Chrome, and an AI assistant you already use (like Claude Code). It's free and open source, runs entirely on your own computer — no account, no API key. It reads your tabs; it never sends them anywhere, and it can't touch anyone else's.</p>
+    <p class="sub">You'll need macOS, Google Chrome, an AI assistant you already use (like Claude Code), and Node + Python 3 for the local bridge (most dev machines already have both). It's free and open source, runs entirely on your own computer — no account, no API key. It reads your tabs; it never sends them anywhere, and it can't touch anyone else's.</p>
     <div class="install-grid">
       <div class="install-step">
         <span class="n">1</span>
@@ -639,8 +639,9 @@
       <div class="install-step">
         <span class="n">3</span>
         <div>
-          <h4>Let it see your pages</h4>
-          <p>The first time, your Mac and Chrome will ask permission for Handle to read your open tabs — say yes. That's what lets it read what you're looking at, including the pages behind your work login.</p>
+          <h4>Let it read your pages — two one-time settings</h4>
+          <p><b>a.</b> The first read pops a macOS prompt to let it control Chrome — click <b>OK</b>.<br>
+          <b>b.</b> In Chrome, turn on <b>View → Developer → Allow JavaScript from Apple Events</b>. This one's a menu toggle, not a popup, and it's off by default — it's what lets Handle read the actual text on a page. Skip it and tabs list fine but reads come back empty.</p>
         </div>
       </div>
       <div class="install-step">
