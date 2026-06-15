@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
 APPLESCRIPT = APP_DIR / "tabs.applescript"
+HANDLE_URL = os.environ.get("HANDLE_URL", "http://127.0.0.1:4910")
 
 FS = "\x1f"  # field separator within a record
 RS = "\x1e"  # record separator between tabs
@@ -432,16 +434,61 @@ MAIN_CONTENT_JS = (
 )
 
 
+def _ext_tab_id_for_url(url: str) -> int | None:
+    """Map a tab URL → the extension's chrome.tabs id, from the synced state."""
+    try:
+        st = json.loads(STATE_PATH.read_text())
+    except Exception:
+        return None
+    tabs = st.get("tabs") if isinstance(st, dict) else st
+    rows = tabs.values() if isinstance(tabs, dict) else (tabs or [])
+    for t in rows:
+        if isinstance(t, dict) and t.get("url") == url and t.get("ext_tab_id") is not None:
+            return t["ext_tab_id"]
+    return None
+
+
+def _ext_eval(ext_tab_id: int, js: str, timeout: int = 40) -> str | None:
+    """Run JS in a tab via the connected Handle extension (chrome.scripting).
+
+    Permission-free and independent of Chrome's "Allow JavaScript from Apple
+    Events" toggle. Returns the expression's string value, or None if the
+    bridge is absent/errors (so the caller can fall back to AppleScript).
+    """
+    body = json.dumps({"method": "eval",
+                       "params": {"tab_id": ext_tab_id, "expression": js},
+                       "timeout": timeout}).encode()
+    try:
+        req = urllib.request.Request(HANDLE_URL + "/ext/cmd", data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout + 5) as r:
+            res = json.loads(r.read())
+    except Exception:
+        return None
+    if not isinstance(res, dict) or res.get("error"):
+        return None
+    val = res.get("value")
+    return val if isinstance(val, str) else None
+
+
 def run_tab_js(url: str, js: str, limit: int = 8000) -> str:
     """Execute arbitrary JS in the open tab matching `url`; return its string.
 
-    The generic primitive behind every extractor. Chrome's `execute javascript`
-    evaluates synchronously and returns the expression's value — so the JS must
-    return a value directly (a Promise would come back unresolved; use a
-    synchronous XMLHttpRequest for in-tab fetches). Returns "" if the tab isn't
-    found or Chrome's "Allow JavaScript from Apple Events" is off. Raw text is
+    The generic primitive behind every extractor. Prefers the Handle extension
+    (chrome.scripting — permission-free, works regardless of the "Allow
+    JavaScript from Apple Events" toggle) and falls back to Chrome's AppleScript
+    `execute javascript`. Either way the JS must return a value directly (a
+    Promise would come back unresolved; use a synchronous XMLHttpRequest for
+    in-tab fetches). Returns "" if no path can reach the tab. Raw text is
     returned (newlines preserved) so callers can format as they need.
     """
+    # Preferred path: the extension bridge (toggle-independent, permission-free).
+    ext_id = _ext_tab_id_for_url(url)
+    if ext_id is not None:
+        val = _ext_eval(ext_id, js, timeout=max(40, limit // 200_000))
+        if val is not None:
+            return val[:limit]
+    # Fallback: AppleScript (needs "Allow JavaScript from Apple Events" on).
     safe_url = url.replace("\\", "\\\\").replace('"', '\\"')
     # Run the JS via eval(atob('<base64>')) so the source crosses the AppleScript
     # string boundary untouched — no quote/backslash/newline escaping to get
@@ -646,13 +693,14 @@ def read_office_docx(url: str, limit: int = 40000) -> str:
     is_word = ":w:" in low or low.split("?")[0].endswith(".docx")
     if not is_word:
         return ""
-    # The viewer URL looks like https://host/:w:/r/sites/<site>/_layouts/15/Doc.aspx?sourcedoc=%7BGUID%7D
+    # Viewer URLs look like https://host/:w:/r/<sites|personal>/<web>/_layouts/15/Doc.aspx?sourcedoc=%7BGUID%7D
+    # — team sites use /sites/<site>/, OneDrive personal docs use /personal/<user>/.
     host = re.match(r"(https://[^/]+)", url)
-    site = re.search(r"/sites/([^/?]+)", url)
+    web = re.search(r"/(sites|personal)/([^/?]+)", url)
     guid = re.search(r"sourcedoc=%7B([0-9A-Fa-f-]+)%7D", url) or re.search(r"sourcedoc=\{?([0-9A-Fa-f-]+)", url)
-    if not (host and site and guid):
+    if not (host and web and guid):
         return ""
-    dl = (f"{host.group(1)}/sites/{site.group(1)}"
+    dl = (f"{host.group(1)}/{web.group(1)}/{web.group(2)}"
           f"/_layouts/15/download.aspx?UniqueId=%7B{guid.group(1)}%7D")
     js = ("(function(){try{var x=new XMLHttpRequest();x.open('GET','" + dl + "',false);"
           "x.overrideMimeType('text/plain; charset=x-user-defined');x.send();"

@@ -61,7 +61,30 @@ async function syncTabs() {
 }
 
 // ---- live command handlers ------------------------------------------------
+// Chrome discards stale background tabs to save memory; script can't inject
+// into a discarded tab (it fails with a misleading host-permission error).
+// Wake it — reload and wait for load — before any scripting call.
+async function wakeTab(tabId) {
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); } catch (e) { return; }
+  if (!tab.discarded && tab.status === "complete") return;
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(done);
+      resolve();
+    };
+    const done = (id, info) => { if (id === tabId && info.status === "complete") finish(); };
+    chrome.tabs.onUpdated.addListener(done);
+    if (tab.discarded) chrome.tabs.reload(tabId).catch(() => {});
+    setTimeout(finish, 12000);  // SharePoint can redirect through auth; cap the wait
+  });
+}
+
 async function readTab(tabId) {
+  await wakeTab(tabId);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => ({
@@ -74,6 +97,7 @@ async function readTab(tabId) {
 }
 
 async function evalIn(tabId, expression) {
+  await wakeTab(tabId);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
