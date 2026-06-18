@@ -4,5 +4,5 @@
   "entry": "app.py",
   "port": 4910,
   "open": "http://localhost:4910",
-  "description": "Gives every open Chrome tab a stable handle (t1, t2…) you can reference and read from Claude Code — pull a tab's live content past login walls, grep across what's open, group stale tabs on a board. Pure stdlib — no dependencies."
+  "description": "Gives every open Chrome tab a stable handle (t1, t2\u2026) you reference from Claude Code \u2014 read a tab's live content past login walls, grep across what's open, and now ACT on a tab too (click/type/watch, CSP-safe). Pure stdlib \u2014 no dependencies."
 }

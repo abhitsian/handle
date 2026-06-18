@@ -1111,6 +1111,96 @@ def cmd_open(args) -> None:
     print(f"{'Focused' if ok else 'Could not focus'} {tab['id']}  {tab['title']}")
 
 
+# ---- act on a tab: run JS, click, type (via the extension's MAIN-world eval) ----
+def _run_js(tab: dict, expr: str, timeout: int = 20):
+    """Run JS in a tab and return (ok, value_or_error). Uses the extension bridge."""
+    if tab.get("ext_tab_id") is None:
+        return False, "no extension tab id — load the Handle extension and run the board (app.py)"
+    if not _ext_alive():
+        return False, "Handle extension not connected — load it at chrome://extensions and run app.py"
+    res = _ext_cmd("eval", {"tab_id": tab["ext_tab_id"], "expression": expr}, timeout=timeout)
+    if isinstance(res, dict) and "value" in res:
+        v = res["value"]
+        if isinstance(v, str) and v.startswith("ERR: "):
+            return False, v[5:]
+        return True, v
+    return False, (res.get("error") if isinstance(res, dict) else "eval failed")
+
+
+def _ext_act(tab: dict, method: str, params: dict, timeout: int = 20):
+    """Run a structured action (click/type) via the extension's isolated-world
+    injected function — CSP-safe (works where string-eval is blocked). (ok, val)."""
+    if tab.get("ext_tab_id") is None:
+        return False, "no extension tab id — load the Handle extension and run the board (app.py)"
+    if not _ext_alive():
+        return False, "Handle extension not connected — load it at chrome://extensions and run app.py"
+    res = _ext_cmd(method, {"tab_id": tab["ext_tab_id"], **params}, timeout=timeout)
+    if isinstance(res, dict) and "value" in res:
+        return True, res["value"]
+    return False, (res.get("error") if isinstance(res, dict) else method + " failed")
+
+
+def _notify(title: str, msg: str) -> None:
+    try:
+        import subprocess
+        subprocess.run(["osascript", "-e", "display notification %s with title %s" % (json.dumps(msg), json.dumps(title))],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
+def cmd_eval(args) -> None:
+    tab = resolve_one(args.ref, load_tabs())
+    ok, val = _run_js(tab, args.js)
+    print(val if ok else "✗ " + str(val))
+    if not ok:
+        sys.exit(1)
+
+
+def cmd_click(args) -> None:
+    tab = resolve_one(args.ref, load_tabs())
+    if not args.text and not args.selector:
+        print("give a CSS selector or --text"); sys.exit(1)
+    ok, val = _ext_act(tab, "click", {"sel": args.selector, "text": args.text})
+    if not ok:
+        print("✗ " + str(val)); sys.exit(1)
+    if val == "NOT_FOUND":
+        print(f"✗ no element matching {args.text or args.selector!r} in {tab['id']}  {tab['title'][:40]}"); sys.exit(1)
+    print(f"✓ {tab['id']}  {val}")
+
+
+def cmd_type(args) -> None:
+    tab = resolve_one(args.ref, load_tabs())
+    ok, val = _ext_act(tab, "type", {"sel": args.selector, "text": args.text})
+    if not ok or val == "NOT_FOUND":
+        print("✗ " + (str(val) if not ok else f"no field matching {args.selector!r}")); sys.exit(1)
+    print(f"✓ {tab['id']}  {val}")
+
+
+def cmd_watch(args) -> None:
+    """Poll a tab until a JS condition is truthy, then act + notify. Self-looping
+    monitor; also composes under /loop via the eval/click primitives."""
+    import time
+    tab = resolve_one(args.ref, load_tabs())
+    check = "Boolean(%s)" % args.check
+    deadline = time.time() + args.timeout
+    sys.stderr.write(f"watching {tab['id']} '{tab['title'][:40]}' every {args.every}s until: {args.check}\n")
+    while time.time() < deadline:
+        ok, val = _run_js(tab, check)
+        if not ok:
+            print("✗ " + str(val)); sys.exit(1)
+        if str(val) == "true":
+            print(f"✓ condition met on {tab['id']}  {tab['title'][:40]}")
+            if args.click:
+                _, v = _ext_act(tab, "click", {"sel": args.click}); print("  click → " + str(v))
+            if args.do:
+                _, v = _run_js(tab, args.do); print("  do → " + str(v))
+            _notify("Handle watch", args.say or ("Condition met: " + tab["title"][:50]))
+            return
+        time.sleep(args.every)
+    print(f"timed out after {args.timeout}s — condition never met")
+
+
 def cmd_close(args) -> None:
     tabs = load_tabs()
     for ref in args.refs:
@@ -1357,6 +1447,33 @@ def build_parser() -> argparse.ArgumentParser:
     scl.add_argument("--limit", type=int, default=40)
     scl.add_argument("--json", action="store_true")
     scl.set_defaults(func=cmd_closed)
+
+    sev = sub.add_parser("eval", help="run JS in a tab and print the result")
+    sev.add_argument("ref")
+    sev.add_argument("js", help="JavaScript expression to evaluate in the page")
+    sev.set_defaults(func=cmd_eval)
+
+    sck = sub.add_parser("click", help="click an element in a tab (CSS selector or --text)")
+    sck.add_argument("ref")
+    sck.add_argument("selector", nargs="?", help="CSS selector to click")
+    sck.add_argument("--text", help="click the element whose visible text contains this")
+    sck.set_defaults(func=cmd_click)
+
+    sty = sub.add_parser("type", help="type text into a field (CSS selector)")
+    sty.add_argument("ref")
+    sty.add_argument("selector", help="CSS selector of the input/textarea")
+    sty.add_argument("text", help="text to set")
+    sty.set_defaults(func=cmd_type)
+
+    swt = sub.add_parser("watch", help="poll a tab until a JS condition is true, then act + notify")
+    swt.add_argument("ref")
+    swt.add_argument("--check", required=True, help="JS expression; the watch fires when it is truthy")
+    swt.add_argument("--every", type=int, default=30, help="poll interval in seconds (default 30)")
+    swt.add_argument("--timeout", type=int, default=3600, help="give up after N seconds (default 3600)")
+    swt.add_argument("--click", help="CSS selector to click when the condition fires")
+    swt.add_argument("--do", help="JS to run when the condition fires")
+    swt.add_argument("--say", help="custom notification text")
+    swt.set_defaults(func=cmd_watch)
 
     so = sub.add_parser("open", help="bring a tab to the front")
     so.add_argument("ref")

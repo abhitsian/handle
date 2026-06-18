@@ -4,13 +4,15 @@
 //   1. push the current tabs + native tab groups to /ext/sync (replaces the
 //      AppleScript scan: no Automation permission, includes real groups)
 //   2. long-poll /ext/poll for live commands (read / screenshot / console /
-//      eval) and return each result to /ext/result
+//      eval / click / type) and return each result to /ext/result
 //
-// Read-only: it reads tab content and captures screenshots/console; it never
-// clicks, types, or navigates. It talks to nothing but 127.0.0.1:4910.
+// Mostly read (content, screenshots, console). It can also act on a tab —
+// click and type — when asked, for monitor/automation flows. Click/type run a
+// real injected function in the isolated world so they survive page CSP. It
+// talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 
 // Never let a debugger op hang forever (e.g. attach stalls because DevTools or
 // another CDP client already holds the tab). Reject fast so the caller gets a
@@ -109,6 +111,46 @@ async function evalIn(tabId, expression) {
   return { value: res.result };
 }
 
+// click / type run a REAL injected function in the default (isolated) world, so
+// they work even on pages whose CSP blocks string-eval (Okta, banks, etc.).
+async function clickIn(tabId, sel, text) {
+  await wakeTab(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (sel, text) => {
+      let el;
+      if (text) {
+        const q = (text + "").toLowerCase();
+        el = [].slice.call(document.querySelectorAll("button,a,[role=button],input[type=submit],input[type=button],[onclick]"))
+          .find((e) => ((e.innerText || e.value || "") + "").trim().toLowerCase().indexOf(q) >= 0);
+      } else { el = document.querySelector(sel); }
+      if (!el) return "NOT_FOUND";
+      el.scrollIntoView({ block: "center" });
+      el.click();
+      return "clicked: " + ((el.innerText || el.value || el.tagName) + "").trim().slice(0, 60);
+    },
+    args: [sel || null, text || null],
+  });
+  return { value: res.result };
+}
+
+async function typeIn(tabId, sel, text) {
+  await wakeTab(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (sel, text) => {
+      const el = document.querySelector(sel);
+      if (!el) return "NOT_FOUND";
+      el.focus(); el.value = text;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return "typed into " + (el.name || el.id || el.tagName);
+    },
+    args: [sel, text],
+  });
+  return { value: res.result };
+}
+
 // Attach cleanly: if a stale attachment is lingering (e.g. a prior dispatch
 // died before its finally{} could detach), clear it and retry once.
 async function attachClean(target) {
@@ -167,6 +209,8 @@ async function dispatch(cmd) {
   switch (method) {
     case "read": return await readTab(tabId);
     case "eval": return await evalIn(tabId, params.expression || "");
+    case "click": return await clickIn(tabId, params.sel, params.text);
+    case "type": return await typeIn(tabId, params.sel, params.text);
     case "screenshot": return await withTimeout(screenshot(tabId), 8000, "screenshot");
     case "console": return await withTimeout(consoleLogs(tabId, params.ms || 1800), (params.ms || 1800) + 6000, "console");
     case "ping": return { pong: true, version: VERSION };

@@ -16,8 +16,11 @@ downloads — searched by meaning, not keywords. Two things nothing else does:
    *"reopen the doc I closed this morning."* Chrome's own history can't search by
    meaning; agentic-browser tools don't touch your history at all.
 
-It only ever **reads** — never clicks, types, or drives the page. Read-only,
-local, no API key, open source.
+And it doesn't only read — when you ask, Handle **acts** on a tab too:
+**click, type, and watch**, for monitor-and-drive flows. Acting runs a real
+injected function in the page's *isolated world*, so it survives a strict
+Content-Security-Policy (Okta, Teams, banks) that blocks ordinary scripting.
+Local, no API key, open source.
 
 A quick taste (you say it in plain English; the agent runs the tools):
 
@@ -29,6 +32,8 @@ A quick taste (you say it in plain English; the agent runs the tools):
 | "Answer this from the six tabs I have open" | reads all six, answers cited by tab |
 | "Reopen the doc I closed this morning" | recovers it from the session, reopens it |
 | "What errors are on this page?" | console logs/errors (via the extension) |
+| "Click into the Activity feed and screenshot it" | clicks the element, even behind a strict CSP |
+| "Watch this PR and ping me when checks pass" | polls the live page, fires when your condition is met |
 
 Every open tab also gets a **stable handle** (`t1`, `t2`…) you reference from a
 Claude Code session, and there's a board (localhost:4910) that shows the same
@@ -36,8 +41,9 @@ handles, grouped into tasks and flagged when **stale**.
 
 Ships three ways: a **CLI** (`tab`), a **board**, and an **MCP server**
 ([`mcp/`](mcp/), 25 tools) so any agent uses it as first-class tools —
-`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. It reads
-*your* Chrome — it never drives the page, and never exposes anyone else's tabs.
+`claude mcp add handle -- node ~/claude-apps/handle/mcp/server.js`. It works on
+*your* Chrome — reads and acts only on the tabs you point it at, and never
+exposes anyone else's.
 
 ## From Claude Code
 
@@ -68,6 +74,12 @@ looking at."
     tab shot t49 [--full]    # screenshot the tab → PNG path(s) the agent reads with vision
     tab active               # the frontmost tab ("what I'm looking at")
     tab open / close / note / group / pin / refresh
+
+    # act on a tab — not just read (CSP-safe via an isolated-world injected fn)
+    tab click t49 "button.submit"     # click an element (or --text "Save")
+    tab type t49 "input#q" "hello"     # type into a field
+    tab eval t49 "document.title"      # run JS in the page (MAIN world; a hard CSP may block)
+    tab watch t49 --check "<js>" --every 30 --timeout 600 [--click <sel> --say "<msg>"]  # poll → act/notify when it fires
 
     # beyond your open tabs — Chrome's own data (titles + links, never content)
     tab history "datacenter" # query Chrome history; filter the results in plain language
@@ -108,6 +120,26 @@ copy, Handle reads `pbpaste`. Screenshots need macOS Screen Recording (one-time)
 
 When content comes back empty, the payload's `note` says exactly why (export
 blocked, not signed in, JavaScript-from-Apple-Events off, …).
+
+## Acting on a tab
+
+Reading is the default, but Handle can also **drive** a tab when you ask — for
+monitoring and automation, not just observation:
+
+- **`tab click <ref> "<sel>"`** (or `--text "Save"`) — click an element.
+- **`tab type <ref> "<sel>" "<text>"`** — fill a field.
+- **`tab watch <ref> --check "<js>" --every N --timeout M`** — poll the live page
+  and **act** (`--click`, `--do`) or **notify** (`--say`) the moment your
+  condition fires. A self-contained monitor with no API to poll.
+- **`tab eval <ref> "<js>"`** — run JS in the page (MAIN world).
+
+`click`/`type` run a **real injected function in the page's isolated world**, so
+they survive a strict Content-Security-Policy (Okta, Teams, banks) that blocks
+string-`eval`. That's what lets a `/loop` open the Teams Activity feed and
+screenshot it on a page where ordinary scripting is refused. Acting goes through
+the **extension** (the isolated-world injection lives there); `eval` is MAIN-world,
+so a hard CSP can still refuse it. Handle still acts only on the tabs you point
+it at, on your own logged-in Chrome.
 
 ## Beyond your open tabs — Chrome's own data
 
@@ -154,7 +186,8 @@ Once it's in, Handle matches the method to the content — clean article text fo
 web pages, the document's own file for Google/Office docs, and a **screenshot
 read with vision** for designs, PDFs, and slides that have no text to grab.
 Separately, it reads **copies** of Chrome's own history/downloads databases —
-read-only, pointers only. Nothing here ever writes, clicks, or types.
+strictly read-only, pointers only. (Driving a live tab — click/type/watch — is a
+separate, explicit capability; see *Acting on a tab* above.)
 
 ## Sturdier backends — the extension & CDP
 
