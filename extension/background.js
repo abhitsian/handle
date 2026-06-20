@@ -12,7 +12,7 @@
 // talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.1.0";
+const VERSION = "1.2.1";
 
 // Never let a debugger op hang forever (e.g. attach stalls because DevTools or
 // another CDP client already holds the tab). Reject fast so the caller gets a
@@ -113,40 +113,83 @@ async function evalIn(tabId, expression) {
 
 // click / type run a REAL injected function in the default (isolated) world, so
 // they work even on pages whose CSP blocks string-eval (Okta, banks, etc.).
+// Both pierce shadow DOM (modern apps like Teams put inputs in shadow roots that
+// document.querySelector can't see) via a deep element walk.
 async function clickIn(tabId, sel, text) {
   await wakeTab(tabId);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
     func: (sel, text) => {
+      const deep = (root, acc) => {
+        let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
+        for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
+        return acc;
+      };
+      const all = deep(document, []);
       let el;
       if (text) {
         const q = (text + "").toLowerCase();
-        el = [].slice.call(document.querySelectorAll("button,a,[role=button],input[type=submit],input[type=button],[onclick]"))
-          .find((e) => ((e.innerText || e.value || "") + "").trim().toLowerCase().indexOf(q) >= 0);
-      } else { el = document.querySelector(sel); }
+        const ROLES = ["button", "option", "menuitem", "menuitemradio", "menuitemcheckbox", "link", "tab", "treeitem", "listitem"];
+        const clickable = all.filter((e) => /^(BUTTON|A)$/.test(e.tagName) || (e.getAttribute && (ROLES.includes(e.getAttribute("role")) || e.hasAttribute("onclick") || e.hasAttribute("tabindex"))) || /^(submit|button)$/.test(e.type || ""));
+        const hit = (e) => ((e.innerText || e.value || e.getAttribute("aria-label") || "") + "").trim().toLowerCase().indexOf(q) >= 0;
+        // prefer the smallest (most specific) matching node, not a huge container
+        el = clickable.filter(hit).sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+      } else {
+        el = document.querySelector(sel) || all.find((e) => { try { return e.matches(sel); } catch (x) { return false; } });
+      }
       if (!el) return "NOT_FOUND";
       el.scrollIntoView({ block: "center" });
       el.click();
-      return "clicked: " + ((el.innerText || el.value || el.tagName) + "").trim().slice(0, 60);
+      return "clicked: " + ((el.innerText || el.value || el.getAttribute("aria-label") || el.tagName) + "").trim().slice(0, 60);
     },
     args: [sel || null, text || null],
   });
   return { value: res.result };
 }
 
-async function typeIn(tabId, sel, text) {
+async function typeIn(tabId, sel, text, submit) {
   await wakeTab(tabId);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (sel, text) => {
-      const el = document.querySelector(sel);
+    func: (sel, text, submit) => {
+      const deep = (root, acc) => {
+        let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
+        for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
+        return acc;
+      };
+      const all = deep(document, []);
+      const isCE = (e) => e && (e.isContentEditable || (e.getAttribute && e.getAttribute("contenteditable") === "true"));
+      const lbl = (e) => ((e.getAttribute && (e.getAttribute("aria-label") || e.getAttribute("data-placeholder") || e.getAttribute("placeholder"))) || e.placeholder || "");
+      let el = null;
+      if (sel) el = document.querySelector(sel) || all.find((e) => { try { return e.matches(sel); } catch (x) { return false; } });
+      if (!el) {
+        // heuristic: a message/Copilot composer — prefer a labelled editable
+        el = all.find((e) => isCE(e) && /copilot|message|ask|reply|compose/i.test(lbl(e)))
+          || all.find((e) => isCE(e))
+          || all.find((e) => /^(TEXTAREA|INPUT)$/.test(e.tagName) && /copilot|message|ask/i.test(lbl(e) + ""));
+      }
       if (!el) return "NOT_FOUND";
-      el.focus(); el.value = text;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return "typed into " + (el.name || el.id || el.tagName);
+      el.focus();
+      if (isCE(el)) {
+        try { const s = window.getSelection(); s.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(el); s.addRange(r); } catch (e) {}
+        let ok = false; try { ok = document.execCommand("insertText", false, text); } catch (e) {}
+        if (!ok || !(el.innerText || "").trim()) {
+          el.textContent = text;
+          el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+        }
+      } else {
+        el.value = text;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      let sent = false;
+      if (submit) {
+        const fire = (t) => el.dispatchEvent(new KeyboardEvent(t, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        fire("keydown"); fire("keypress"); fire("keyup"); sent = true;
+      }
+      return "typed" + (isCE(el) ? "(ce)" : "") + (sent ? "+enter" : "") + ": " + ((el.innerText || el.value || "") + "").trim().slice(0, 40);
     },
-    args: [sel, text],
+    args: [sel || null, text, !!submit],
   });
   return { value: res.result };
 }
@@ -210,7 +253,7 @@ async function dispatch(cmd) {
     case "read": return await readTab(tabId);
     case "eval": return await evalIn(tabId, params.expression || "");
     case "click": return await clickIn(tabId, params.sel, params.text);
-    case "type": return await typeIn(tabId, params.sel, params.text);
+    case "type": return await typeIn(tabId, params.sel, params.text, params.submit);
     case "screenshot": return await withTimeout(screenshot(tabId), 8000, "screenshot");
     case "console": return await withTimeout(consoleLogs(tabId, params.ms || 1800), (params.ms || 1800) + 6000, "console");
     case "ping": return { pong: true, version: VERSION };
