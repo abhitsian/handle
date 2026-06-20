@@ -11,8 +11,9 @@
  * tool shells out to `python3 tab.py <cmd> --json`. Screenshots come back as
  * inline images the model reads with vision.
  *
- * Tools: list_tabs, find_tab, grep_tabs, read_tab, screenshot_tab, active_tab,
- *        open_tab, close_tab, note_tab, group_tab, pin_tab, refresh_tabs
+ * Tools: list_tabs, find_tab, grep_tabs, read_tab, crawl, screenshot_tab,
+ *        active_tab, open_tab, close_tab, note_tab, group_tab, pin_tab,
+ *        refresh_tabs
  * Requires: macOS + Google Chrome, Python 3 on PATH. For read/screenshot,
  *   Chrome → View → Developer → "Allow JavaScript from Apple Events", and
  *   Screen Recording permission for screenshots.
@@ -138,6 +139,32 @@ function toolReadTab(a) {
 
 function toolGrab() {
   return [{ type: 'text', text: runTab(['grab']) }];
+}
+
+function toolCrawl(a) {
+  const hasFrom = a.from != null && String(a.from).length;
+  const hasUrls = Array.isArray(a.urls) ? a.urls.length : (a.urls != null && String(a.urls).length);
+  if (!hasFrom && !hasUrls) throw new Error('give "from" (an index tab ref) or "urls" (a list of URLs) — at least one is required');
+  const args = ['crawl', '--json'];
+  if (hasFrom) args.push('--from', String(a.from));
+  if (a.match) args.push('--match', String(a.match));
+  if (hasUrls) args.push('--urls', asArray(a.urls).map(String).join(','));
+  if (a.mode) args.push('--mode', String(a.mode));
+  if (a.chars != null) args.push('--chars', String(a.chars));
+  const r = runTab(args, { json: true });
+  const pages = (r && r.pages) || [];
+  if (!pages.length) {
+    const errs = (r && r.errors) || [];
+    return [{ type: 'text', text: errs.length ? errs.join('\n') : (typeof r === 'string' ? r : 'Nothing crawled.') }];
+  }
+  const blocks = pages.map((p) => {
+    const note = p.note ? `\n_${p.note}_\n` : '';
+    return `## ${p.title}\n${p.url}\n${note}\n${p.text || '(no readable text)'}`;
+  });
+  let text = blocks.join('\n\n---\n\n');
+  if (r && Array.isArray(r.errors) && r.errors.length) text += '\n\n---\n\nerrors:\n' + r.errors.map((e) => '· ' + e).join('\n');
+  if (r && r.out) text += `\n\n(combined markdown written → ${r.out})`;
+  return [{ type: 'text', text }];
 }
 
 function toolScreenshotTab(a) {
@@ -316,6 +343,24 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'crawl',
+    description:
+      'Crawl a COLLECTION into combined text in one call — the fast path behind the /tab-crawl skill. Give an ' +
+      'index tab (from) whose links you want to follow (narrow with match), or an explicit urls list. Each page ' +
+      'is visited and its FULL text pulled (past the normal read cap). Same-origin pages navigate the index tab ' +
+      'in place (SPA); cross-origin pages each open in a fresh tab, get read, then close — with a focus-race ' +
+      'guard so it never reads the wrong tab. One page failing never aborts the crawl. Use for "read all the ' +
+      'linked articles", "pull every page in this collection", "crawl these urls". PDFs/video pages return ' +
+      'little text (noted per page). Returns each page as a section; you answer/synthesize from them.',
+    inputSchema: { type: 'object', properties: {
+      from: { type: 'string', description: 'A tab reference whose current page is the index/collection — links are extracted from it. ' + REF_DESC },
+      urls: { description: 'Explicit URLs to crawl (alternative to from/match). May be an array.', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      match: { type: 'string', description: 'With from: keep only links whose href contains this substring (comma-separated for several).' },
+      mode: { type: 'string', enum: ['auto', 'spa', 'spawn'], description: 'auto (default): same-origin as from → navigate in place, else spawn/read/close. Force spa or spawn to override.' },
+      chars: { type: 'number', description: 'Max characters of text per page (0 = full innerText; default 20000).' },
+    } },
+  },
+  {
     name: 'screenshot_tab',
     description:
       'Capture the tab as image(s) for you to read with vision — the catch-all for anything the DOM can\'t give ' +
@@ -444,7 +489,7 @@ const TOOLS = [
 const HANDLERS = {
   list_tabs: toolListTabs, find_tab: toolFindTab, grep_tabs: toolGrepTabs, ask_tabs: toolAskTabs,
   save_tabs: toolSaveTabs, list_bundles: toolListBundles, recall_bundle: toolRecallBundle,
-  grab_clipboard: toolGrab,
+  grab_clipboard: toolGrab, crawl: toolCrawl,
   read_tab: toolReadTab, screenshot_tab: toolScreenshotTab, active_tab: toolActiveTab,
   open_tab: toolOpenTab, close_tab: toolCloseTab, note_tab: toolNoteTab,
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,

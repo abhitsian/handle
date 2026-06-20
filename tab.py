@@ -1171,9 +1171,9 @@ def cmd_click(args) -> None:
 
 def cmd_type(args) -> None:
     tab = resolve_one(args.ref, load_tabs())
-    ok, val = _ext_act(tab, "type", {"sel": args.selector, "text": args.text})
+    ok, val = _ext_act(tab, "type", {"sel": args.selector, "text": args.text, "submit": bool(args.submit)})
     if not ok or val == "NOT_FOUND":
-        print("✗ " + (str(val) if not ok else f"no field matching {args.selector!r}")); sys.exit(1)
+        print("✗ " + (str(val) if not ok else f"no field matching {args.selector or '(heuristic)'!r}")); sys.exit(1)
     print(f"✓ {tab['id']}  {val}")
 
 
@@ -1199,6 +1199,303 @@ def cmd_watch(args) -> None:
             return
         time.sleep(args.every)
     print(f"timed out after {args.timeout}s — condition never met")
+
+
+# --------------------------------------------------------------------------- #
+# crawl — visit every page in a collection and pull its full text in one call
+# --------------------------------------------------------------------------- #
+# The proven manual pattern made one-shot: from an index page (or an explicit
+# URL list), visit each sub-page, extract its full innerText (past the read
+# cap), and return them together. Same-origin urls navigate the --from tab in
+# place (SPA); cross-origin urls spawn a fresh tab per url, then close it.
+# Defensive throughout: a single page failing is recorded and the crawl
+# continues; spawned tabs are cleaned up at the end.
+
+# Full-text extractor — main/article/body innerText (gets past the read cap).
+_CRAWL_TEXT_JS = ("(function(){var m=document.querySelector('main')||"
+                  "document.querySelector('article')||document.body;"
+                  "return m?m.innerText:'';})()")
+
+# Pull every link off the index page as [{href,text}] (resolved, absolute).
+_CRAWL_LINKS_JS = ("(function(){var out=[],seen={};"
+                   "var as=document.querySelectorAll('a[href]');"
+                   "for(var i=0;i<as.length;i++){var h=as[i].href;"
+                   "if(!h||seen[h])continue;"
+                   "if(h.indexOf('http')!==0)continue;seen[h]=1;"
+                   "out.push({href:h,text:(as[i].innerText||'').trim().slice(0,120)});}"
+                   "return JSON.stringify(out);})()")
+
+
+def _crawl_origin(url: str) -> str:
+    """Scheme+host of a url (for same-origin detection); '' if unparseable."""
+    try:
+        from urllib.parse import urlsplit
+        s = urlsplit(url)
+        return f"{s.scheme}://{s.netloc}" if s.scheme and s.netloc else ""
+    except Exception:
+        return ""
+
+
+def _crawl_run_js(tab: dict, expr: str, attempts: int = 3, timeout: int = 20):
+    """_run_js with flicker-retry: eval/read intermittently report 'not
+    connected'/'no extension tab id'. Re-check _ext_alive, sleep ~3s, retry up
+    to `attempts` times. Returns (ok, value_or_error)."""
+    import time
+    last = ""
+    for i in range(attempts):
+        ok, val = _run_js(tab, expr, timeout=timeout)
+        if ok:
+            return True, val
+        last = str(val)
+        flicker = ("not connected" in last or "no extension tab id" in last
+                   or "extension tab id" in last)
+        if i < attempts - 1 and flicker:
+            _ext_alive()  # nudge / re-check the bridge
+            time.sleep(3)
+            continue
+        if not flicker:
+            break
+    return False, last
+
+
+def _crawl_extract(tab: dict, args) -> tuple[str, str]:
+    """Full text for one already-loaded tab → (text, note). Tries the eval
+    full-text extractor first (past the cap); falls back to the normal read
+    path; notes thin/empty content (PDF / video) rather than failing."""
+    ok, val = _crawl_run_js(tab, _CRAWL_TEXT_JS)
+    text = val if (ok and isinstance(val, str)) else ""
+    if not text.strip():
+        # fall back to the normal read cascade (handles export/screenshot kinds)
+        try:
+            p = _read_one(tab, _ReadArgs(args.chars or 20000))
+            text = p.get("content") or ""
+        except Exception:
+            text = ""
+    note = ""
+    kind = detect_kind(tab["url"])
+    if kind == "pdf":
+        note = "PDF — little/no extractable text; open or WebFetch for the full document."
+    elif "youtube.com" in tab["url"] or "youtu.be" in tab["url"]:
+        note = "Video page — only title/metadata is in the DOM, not the transcript."
+    elif not text.strip():
+        note = "No readable text extracted from this page."
+    cap = args.chars if args.chars is not None else 20000
+    if cap and text:
+        text = text[:cap]
+    return text, note
+
+
+def _crawl_resolve_by_url(url: str, refresh: bool = True) -> dict | None:
+    """Re-find the tab now showing `url` (its handle changes after a SPA
+    navigate). Match exact url first, then same path/origin (SPA may append
+    query/hash)."""
+    tabs = load_tabs(refresh=refresh)
+    hit = next((t for t in tabs if t["url"] == url), None)
+    if hit:
+        return hit
+    from urllib.parse import urlsplit
+    want = urlsplit(url)
+    base = f"{want.scheme}://{want.netloc}{want.path}"
+    return next((t for t in tabs if t["url"].split("?")[0].split("#")[0] == base), None)
+
+
+def _crawl_one_spa(from_tab: dict, url: str, args) -> dict:
+    """Navigate the --from tab in place to `url`, wait, re-resolve its (new)
+    handle, extract. Returns a page record."""
+    import time
+    rec = {"title": url, "url": url, "text": "", "mode": "spa", "ok": False, "note": ""}
+    safe = url.replace("\\", "\\\\").replace("'", "\\'")
+    ok, val = _crawl_run_js(from_tab, f"window.location.href='{safe}'; '1'")
+    if not ok:
+        rec["note"] = f"navigate failed: {val}"
+        return rec
+    time.sleep(args.wait)
+    if _ext_alive():
+        # extension keeps state fresh; a plain reload of state is enough
+        pass
+    tab = _crawl_resolve_by_url(url)
+    if not tab:
+        rec["note"] = "could not re-resolve the tab after navigation"
+        return rec
+    text, note = _crawl_extract(tab, args)
+    rec.update({"title": tab["title"], "url": tab["url"], "text": text,
+                "ok": bool(text.strip()), "note": note})
+    return rec
+
+
+def _crawl_one_spawn(url: str, args, spawned: list) -> dict:
+    """Open `url` in a new tab, wait, find the active tab and VERIFY its url
+    matches (focus-race guard), extract, then close it. Returns a page record.
+    Records the spawned url in `spawned` for end-of-crawl cleanup."""
+    import time
+    rec = {"title": url, "url": url, "text": "", "mode": "spawn", "ok": False, "note": ""}
+    n = collect.open_urls([url])
+    if not n:
+        rec["note"] = "could not open the url"
+        return rec
+    spawned.append(url)
+    time.sleep(args.wait)
+    # find the spawned tab; prefer an exact-url match, fall back to `active`,
+    # and verify we grabbed the right one (focus-race guard).
+    tab = _crawl_resolve_by_url(url)
+    if not tab:
+        active_url = collect.active_tab_url()
+        if active_url and active_url.split("#")[0] != url.split("#")[0]:
+            rec["note"] = (f"focus race — active tab was {active_url[:80]!r}, "
+                           f"not the page opened; skipped")
+            return rec
+        tab = next((t for t in load_tabs(refresh=True) if t["url"] == active_url), None)
+    if not tab:
+        rec["note"] = "opened the url but could not resolve its tab; skipped"
+        return rec
+    text, note = _crawl_extract(tab, args)
+    rec.update({"title": tab["title"], "url": tab["url"], "text": text,
+                "ok": bool(text.strip()), "note": note})
+    # close the tab we spawned (best-effort); drop it from the cleanup list
+    if collect.close_tab(tab["url"]):
+        try:
+            spawned.remove(url)
+        except ValueError:
+            pass
+    return rec
+
+
+def _crawl_targets(args) -> tuple[str | None, dict | None, list[str], list[str]]:
+    """Resolve the crawl inputs → (from_url, from_tab, urls, errors).
+    From an explicit --urls list, or by extracting+matching links off --from."""
+    errors: list[str] = []
+    # explicit url list
+    urls: list[str] = []
+    if args.urls:
+        for chunk in args.urls:
+            urls.extend(u.strip() for u in chunk.split(",") if u.strip())
+    # --match terms (repeatable and/or comma-separated)
+    matches: list[str] = []
+    for chunk in (args.match or []):
+        matches.extend(m.strip().lower() for m in chunk.split(",") if m.strip())
+
+    from_tab = from_url = None
+    if args.from_ref:
+        from_tab = resolve_one(args.from_ref, load_tabs())
+        from_url = from_tab["url"]
+        ok, val = _crawl_run_js(from_tab, _CRAWL_LINKS_JS)
+        if not ok:
+            errors.append(f"could not read links from {from_tab['id']}: {val}")
+        else:
+            try:
+                links = json.loads(val) if isinstance(val, str) else (val or [])
+            except Exception:
+                links = []
+            seen = set(urls)
+            for L in links:
+                href = L.get("href") if isinstance(L, dict) else None
+                if not href or href in seen:
+                    continue
+                if matches and not any(m in href.lower() for m in matches):
+                    continue
+                seen.add(href)
+                urls.append(href)
+    return from_url, from_tab, urls, errors
+
+
+def cmd_crawl(args) -> None:
+    """Crawl a collection: from an index tab (--from, links filtered by --match)
+    or an explicit --urls list, visit each page and pull its full text. SPA /
+    same-origin pages navigate the --from tab in place; cross-origin pages spawn
+    a tab each (verified against a focus race), read, and close. One page failing
+    never aborts the crawl — it's recorded in note/errors and the rest continue.
+    """
+    from_url, from_tab, urls, errors = _crawl_targets(args)
+    from_origin = _crawl_origin(from_url) if from_url else ""
+
+    if not urls:
+        msg = ("Nothing to crawl. Give --from <ref> (with optional --match) or "
+               "--urls <comma-separated>.")
+        if errors:
+            msg += " (" + "; ".join(errors) + ")"
+        if args.json:
+            print(json.dumps({"collection": from_url, "pages": [], "errors": errors or [msg]},
+                             indent=2, ensure_ascii=False))
+            return
+        print(msg)
+        sys.exit(1)
+
+    pages: list[dict] = []
+    spawned: list[str] = []
+    for url in urls:
+        # choose the mode: explicit override, else auto by same-origin vs --from
+        if args.mode == "spa":
+            use_spa = from_tab is not None
+        elif args.mode == "spawn":
+            use_spa = False
+        else:  # auto
+            use_spa = bool(from_tab and from_origin and _crawl_origin(url) == from_origin)
+        try:
+            if use_spa and from_tab is not None:
+                rec = _crawl_one_spa(from_tab, url, args)
+                # the --from tab handle changes after each in-place navigation;
+                # re-resolve it so the next SPA hop starts from the right tab.
+                nt = _crawl_resolve_by_url(rec["url"]) or from_tab
+                from_tab = nt
+            else:
+                rec = _crawl_one_spawn(url, args, spawned)
+        except Exception as exc:
+            rec = {"title": url, "url": url, "text": "", "mode": "spa" if use_spa else "spawn",
+                   "ok": False, "note": f"crawl error: {exc}"}
+            errors.append(f"{url}: {exc}")
+        pages.append(rec)
+
+    # clean up any spawned tabs that weren't closed inline
+    for url in list(spawned):
+        try:
+            collect.close_tab(url)
+        except Exception:
+            pass
+
+    out_path = None
+    if args.out:
+        out_path = _crawl_write_md(from_url, pages, args.out)
+
+    data = {"collection": from_url, "pages": pages, "errors": errors}
+    if out_path:
+        data["out"] = str(out_path)
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    ok_n = sum(1 for p in pages if p["ok"])
+    print(f"Crawled {len(pages)} page(s) ({ok_n} with text)"
+          + (f" from {from_url}" if from_url else "") + ":\n")
+    for p in pages:
+        flag = "✓" if p["ok"] else "✗"
+        note = f"  — {p['note']}" if p["note"] else ""
+        print(f"  {flag} [{p['mode']}] {p['title'][:64]}  ({len(p['text'])}c){note}")
+        print(f"        {p['url']}")
+    if errors:
+        print("\nerrors:")
+        for e in errors:
+            print(f"  · {e}")
+    if out_path:
+        print(f"\nWrote combined markdown → {out_path}")
+
+
+def _crawl_write_md(from_url: str | None, pages: list[dict], path: str) -> Path:
+    """Write a combined markdown file: H1, then a ## section per page with its
+    title, url, note, and full text."""
+    out = Path(path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    title = f"Crawl of {from_url}" if from_url else "Crawl"
+    lines = [f"# {title}", "", f"_{len(pages)} page(s)_", ""]
+    for p in pages:
+        lines.append(f"## {p['title']}")
+        lines.append(p["url"])
+        if p.get("note"):
+            lines.append(f"\n_{p['note']}_")
+        lines.append("")
+        lines.append(p["text"] or "(no readable text)")
+        lines.append("")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
 
 
 def cmd_close(args) -> None:
@@ -1459,10 +1756,11 @@ def build_parser() -> argparse.ArgumentParser:
     sck.add_argument("--text", help="click the element whose visible text contains this")
     sck.set_defaults(func=cmd_click)
 
-    sty = sub.add_parser("type", help="type text into a field (CSS selector)")
+    sty = sub.add_parser("type", help="type text into a field (CSS selector; pierces shadow DOM; pass \"\" to auto-find a message composer)")
     sty.add_argument("ref")
-    sty.add_argument("selector", help="CSS selector of the input/textarea")
+    sty.add_argument("selector", help="CSS selector of the input/textarea, or \"\" to heuristically find a message/Copilot composer")
     sty.add_argument("text", help="text to set")
+    sty.add_argument("--submit", action="store_true", help="press Enter after typing (send the message)")
     sty.set_defaults(func=cmd_type)
 
     swt = sub.add_parser("watch", help="poll a tab until a JS condition is true, then act + notify")
@@ -1474,6 +1772,23 @@ def build_parser() -> argparse.ArgumentParser:
     swt.add_argument("--do", help="JS to run when the condition fires")
     swt.add_argument("--say", help="custom notification text")
     swt.set_defaults(func=cmd_watch)
+
+    scr = sub.add_parser("crawl", help="crawl a collection (index tab or url list) → each page's full text, combined")
+    scr.add_argument("--from", dest="from_ref",
+                     help="a tab ref whose current page is the index/collection (links are extracted from it)")
+    scr.add_argument("--match", action="append",
+                     help="keep only links whose href contains this substring (repeatable or comma-separated; used with --from)")
+    scr.add_argument("--urls", action="append",
+                     help="explicit comma-separated list of URLs to crawl (alternative to --from/--match)")
+    scr.add_argument("--mode", choices=("auto", "spa", "spawn"), default="auto",
+                     help="auto (default): same-origin as --from → navigate in place, else spawn/read/close; or force spa/spawn")
+    scr.add_argument("--chars", type=int, default=20000,
+                     help="max characters of text per page (0 = full innerText; default 20000)")
+    scr.add_argument("--wait", type=float, default=5.0,
+                     help="seconds to wait after navigating/opening before reading (default 5)")
+    scr.add_argument("--out", help="write a combined markdown file (H1 + per-page ## sections) and report the path")
+    scr.add_argument("--json", action="store_true")
+    scr.set_defaults(func=cmd_crawl)
 
     so = sub.add_parser("open", help="bring a tab to the front")
     so.add_argument("ref")

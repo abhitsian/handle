@@ -24,6 +24,7 @@ vision.
 | `save_tabs` | capture tab content into a dated research bundle for later |
 | `list_bundles` / `recall_bundle` | list saved bundles · load one back as context |
 | `read_tab` | read tab(s): HTML text / Markdown (`md`) / Google export / Figma·PDF·Office screenshot |
+| `crawl` | crawl a collection (index tab's links, or a `urls` list) → every page's full text in one call (handles SPA + external) |
 | `screenshot_tab` | capture a tab as image(s) to read with vision (`full` for whole page) |
 | `active_tab` | the frontmost tab — "what I'm looking at" |
 | `open_tab` / `close_tab` / `note_tab` / `group_tab` / `pin_tab` / `refresh_tabs` | act on tabs (`open_tab` also opens a raw URL) |

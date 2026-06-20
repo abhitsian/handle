@@ -72,6 +72,8 @@ looking at."
     tab read t49 --clipboard # read what YOU copied (⌘A ⌘C) — the reliable floor
     tab grab                 # same: read the clipboard
     tab shot t49 [--full]    # screenshot the tab → PNG path(s) the agent reads with vision
+    tab crawl --from t49 --match /post/   # follow an index tab's links → each page's full text, combined
+    tab crawl --urls a.com,b.com          # crawl an explicit url list (spawn → read → close each)
     tab active               # the frontmost tab ("what I'm looking at")
     tab open / close / note / group / pin / refresh
 
