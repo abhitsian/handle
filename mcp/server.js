@@ -13,7 +13,7 @@
  *
  * Tools: list_tabs, find_tab, grep_tabs, read_tab, crawl, screenshot_tab,
  *        active_tab, open_tab, close_tab, note_tab, group_tab, pin_tab,
- *        refresh_tabs
+ *        refresh_tabs, click_tab, type_tab, search_web, audit, meeting
  * Requires: macOS + Google Chrome, Python 3 on PATH. For read/screenshot,
  *   Chrome → View → Developer → "Allow JavaScript from Apple Events", and
  *   Screen Recording permission for screenshots.
@@ -216,6 +216,15 @@ function toolSearchWeb(a) {
   if (!a.query) throw new Error('query is required');
   const args = ['search', String(a.query)];
   if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolMeeting(a) {
+  if (!a.url) throw new Error('url is required');
+  const args = ['meeting', String(a.url)];
+  if (a.passcode) args.push('--passcode', String(a.passcode));
+  if (a.first) args.push('--first', String(a.first));
+  if (a.last) args.push('--last', String(a.last));
+  if (a.email) args.push('--email', String(a.email));
   return [{ type: 'text', text: runTab(args) }];
 }
 function toolAudit(a) {
@@ -572,6 +581,23 @@ const TOOLS = [
       decision: { type: 'string', description: 'Filter by decision (executed/confirmed/blocked/miss/error).' },
     } },
   },
+  {
+    name: 'meeting',
+    description:
+      'Turn a Zoom cloud recording into a transcript on disk. A Zoom recording already ships a full speaker-' +
+      'labelled, timestamped transcript, so this lifts that text directly instead of replaying audio. Give a ' +
+      '/rec/share/ link (+ passcode if protected, + name/email if it shows a registration form); it clears the ' +
+      'gates, focuses the tab (Zoom won\'t load the transcript in a background tab), scrapes every cue, and writes ' +
+      'meetings/<stamp>-<slug>.json + .md. Use for "record this Zoom recording", "transcribe this recording", ' +
+      '"turn this into a meeting note" — then write the note from the emitted file (e.g. into Notion).',
+    inputSchema: { type: 'object', properties: {
+      url: { type: 'string', description: 'The Zoom /rec/share/ recording link.' },
+      passcode: { type: 'string', description: 'Recording passcode, if the link is protected.' },
+      first: { type: 'string', description: 'First name, only if Zoom shows a registration form.' },
+      last: { type: 'string', description: 'Last name, only if Zoom shows a registration form.' },
+      email: { type: 'string', description: 'Email, only if Zoom shows a registration form (used for both email fields).' },
+    }, required: ['url'] },
+  },
 ];
 
 const HANDLERS = {
@@ -584,6 +610,7 @@ const HANDLERS = {
   history: toolHistory, closed: toolClosed, bookmarks: toolBookmarks, downloads: toolDownloads,
   journeys: toolJourneys, most_visited: toolTop, console: toolConsole, ext_status: toolExtStatus,
   click_tab: toolClickTab, type_tab: toolTypeTab, search_web: toolSearchWeb, audit: toolAudit,
+  meeting: toolMeeting,
 };
 
 // ---------- JSON-RPC / MCP stdio loop ----------

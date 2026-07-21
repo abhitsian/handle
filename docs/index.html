@@ -376,7 +376,7 @@
   <!-- MCP TOOLS -->
   <section class="section reveal">
     <h2>The tools your agent gets</h2>
-    <p class="sub">Handle exposes 25 tools over <b>MCP</b>, so any agent can use them as first-class functions. You rarely call these by name — your AI picks the right one — but here's the full surface.</p>
+    <p class="sub">Handle exposes 31 tools over <b>MCP</b>, so any agent can use them as first-class functions. You rarely call these by name — your AI picks the right one — but here's the full surface.</p>
     <div class="tools">
       <div class="toolgroup">
         <h4>Read &amp; reference</h4>
@@ -385,12 +385,14 @@
         <span class="t"><code>find_tab</code><span>resolve "the figma one" to a tab</span></span>
         <span class="t"><code>grep_tabs</code><span>search the on-page content of every open tab</span></span>
         <span class="t"><code>list_tabs</code><span>every open tab, with groups + stale flags</span></span>
+        <span class="t"><code>crawl</code><span>follow a collection's links → each page's full text, combined</span></span>
         <span class="t"><code>screenshot_tab</code><span>capture a tab as image(s) to read with vision</span></span>
         <span class="t"><code>grab_clipboard</code><span>read what you copied — the reliable floor</span></span>
       </div>
       <div class="toolgroup">
         <h4>Ask &amp; keep research</h4>
         <span class="t"><code>ask_tabs</code><span>answer a question across your open tabs, cited</span></span>
+        <span class="t"><code>search_web</code><span>full-text search every page you've read through Handle</span></span>
         <span class="t"><code>save_tabs</code><span>capture tabs into a dated research bundle</span></span>
         <span class="t"><code>recall_bundle</code><span>load a saved bundle back as context</span></span>
         <span class="t"><code>list_bundles</code><span>list your saved research</span></span>
@@ -406,6 +408,9 @@
       </div>
       <div class="toolgroup">
         <h4>Act on tabs</h4>
+        <span class="t"><code>click_tab</code><span>click an element — by selector, text, or intent (CSP-safe)</span></span>
+        <span class="t"><code>type_tab</code><span>type into a field, optionally submit (CSP-safe)</span></span>
+        <span class="t"><code>meeting</code><span>scrape a Zoom recording's transcript → JSON + Markdown</span></span>
         <span class="t"><code>open_tab</code><span>focus a tab, or open any URL</span></span>
         <span class="t"><code>close_tab</code><span>close tabs for real</span></span>
         <span class="t"><code>group_tab</code><span>move a tab into a group</span></span>
@@ -417,6 +422,7 @@
         <h4>Sturdier backend</h4>
         <span class="t"><code>console</code><span>console logs + errors for a tab (via the extension)</span></span>
         <span class="t"><code>ext_status</code><span>is the Chrome extension connected</span></span>
+        <span class="t"><code>audit</code><span>the append-only trail of what Handle did in your session</span></span>
         <span class="t"><code>read_tab --cdp</code><span>read via DevTools Protocol when you've opted in</span></span>
       </div>
     </div>
