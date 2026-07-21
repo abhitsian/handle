@@ -12,7 +12,7 @@
 // talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.2.1";
+const VERSION = "1.7.0";
 
 // Never let a debugger op hang forever (e.g. attach stalls because DevTools or
 // another CDP client already holds the tab). Reject fast so the caller gets a
@@ -138,13 +138,79 @@ async function clickIn(tabId, sel, text) {
         el = document.querySelector(sel) || all.find((e) => { try { return e.matches(sel); } catch (x) { return false; } });
       }
       if (!el) return "NOT_FOUND";
+      const cssPath = (node) => {
+        if (!node || node.nodeType !== 1) return "";
+        const parts = []; let e = node;
+        while (e && e.nodeType === 1 && parts.length < 6) {
+          if (e.id) { parts.unshift("#" + CSS.escape(e.id)); break; }
+          let s = e.tagName.toLowerCase();
+          const p = e.parentElement;
+          if (p) {
+            const sib = Array.prototype.filter.call(p.children, (c) => c.tagName === e.tagName);
+            if (sib.length > 1) s += ":nth-of-type(" + (sib.indexOf(e) + 1) + ")";
+          }
+          parts.unshift(s); e = p;
+        }
+        return parts.join(" > ");
+      };
       el.scrollIntoView({ block: "center" });
       el.click();
-      return "clicked: " + ((el.innerText || el.value || el.getAttribute("aria-label") || el.tagName) + "").trim().slice(0, 60);
+      return { r: "clicked: " + ((el.innerText || el.value || el.getAttribute("aria-label") || el.tagName) + "").trim().slice(0, 60), sel: cssPath(el) };
     },
     args: [sel || null, text || null],
   });
-  return { value: res.result };
+  const out = res.result;
+  if (out === "NOT_FOUND" || !out) return { value: "NOT_FOUND" };
+  return { value: out.r, selector: out.sel };
+}
+
+// resolve — rank candidate elements for an INTENT (text / role / aria) without
+// clicking. Used for self-healing: when a cached selector breaks, re-find the
+// element by what it MEANS, and let the caller (or agent) pick.
+async function resolveEls(tabId, intent) {
+  await wakeTab(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (intent) => {
+      const q = (intent + "").toLowerCase().trim();
+      const deep = (root, acc) => {
+        let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
+        for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
+        return acc;
+      };
+      const cssPath = (node) => {
+        if (!node || node.nodeType !== 1) return "";
+        const parts = []; let e = node;
+        while (e && e.nodeType === 1 && parts.length < 6) {
+          if (e.id) { parts.unshift("#" + CSS.escape(e.id)); break; }
+          let s = e.tagName.toLowerCase();
+          const p = e.parentElement;
+          if (p) {
+            const sib = Array.prototype.filter.call(p.children, (c) => c.tagName === e.tagName);
+            if (sib.length > 1) s += ":nth-of-type(" + (sib.indexOf(e) + 1) + ")";
+          }
+          parts.unshift(s); e = p;
+        }
+        return parts.join(" > ");
+      };
+      const ROLES = ["button", "option", "menuitem", "menuitemradio", "menuitemcheckbox", "link", "tab", "treeitem", "listitem", "checkbox", "radio"];
+      const label = (e) => ((e.innerText || e.value || e.getAttribute("aria-label") || e.getAttribute("title") || "") + "").trim();
+      const clickable = deep(document, []).filter((e) =>
+        /^(BUTTON|A)$/.test(e.tagName) ||
+        (e.getAttribute && (ROLES.includes(e.getAttribute("role")) || e.hasAttribute("onclick") || e.hasAttribute("tabindex"))) ||
+        /^(submit|button)$/.test(e.type || ""));
+      const scored = clickable.map((e) => {
+        const t = label(e).toLowerCase();
+        let s = 0;
+        if (t === q) s = 100; else if (t.indexOf(q) >= 0) s = 60 - Math.min(40, t.length - q.length);
+        else { const qw = q.split(/\s+/), n = qw.filter((w) => w && t.indexOf(w) >= 0).length; s = n ? 30 * n / qw.length : 0; }
+        return { e, s, label: label(e).slice(0, 60), role: e.getAttribute && e.getAttribute("role") || e.tagName.toLowerCase() };
+      }).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 6);
+      return scored.map((x) => ({ label: x.label, role: x.role, score: Math.round(x.s), selector: cssPath(x.e) }));
+    },
+    args: [intent || ""],
+  });
+  return { value: res.result || [] };
 }
 
 async function typeIn(tabId, sel, text, submit) {
@@ -192,6 +258,71 @@ async function typeIn(tabId, sel, text, submit) {
     args: [sel || null, text, !!submit],
   });
   return { value: res.result };
+}
+
+// Scroll a tab from the isolated world (a real injected function, so it works
+// on CSP-strict pages like X/Okta where MAIN-world `eval` is refused). Scrolls
+// the window, and if the window doesn't move, nudges the tallest inner
+// scrollable (apps that scroll a container, not the page). Returns position so
+// the caller can detect the end of an infinite feed (height stops growing).
+async function scrollIn(tabId, dy) {
+  await wakeTab(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (dy) => {
+      const pos = () => (document.scrollingElement || document.documentElement).scrollTop;
+      const before = pos();
+      window.scrollBy(0, dy);
+      if (pos() === before) {
+        let best = null, bestH = 0;
+        for (const el of document.querySelectorAll("div,main,section,ul")) {
+          if (el.scrollHeight > el.clientHeight + 200 && el.scrollHeight > bestH) { best = el; bestH = el.scrollHeight; }
+        }
+        if (best) best.scrollTop += dy;
+      }
+      const s = document.scrollingElement || document.documentElement;
+      return { y: s.scrollTop, h: s.scrollHeight, vh: window.innerHeight };
+    },
+    args: [dy],
+  });
+  return res.result;
+}
+
+// harvest — CSP-safe structured DOM reader. Runs in the ISOLATED world (a real
+// function, never string-eval) so it works on strict-CSP pages like Zoom/Okta
+// where `eval`/`read` are refused. Given a row selector and a {field: subsel}
+// map, returns one object per matching row: {field: innerText}. A field whose
+// subsel is "" (or ".") reads the row element's own text. Also returns the raw
+// row count so callers can probe for presence without pulling data.
+async function harvestIn(tabId, sel, fields, limit) {
+  await wakeTab(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (sel, fields, limit) => {
+      try {
+        const rows = Array.prototype.slice.call(document.querySelectorAll(sel));
+        const cap = limit && limit > 0 ? limit : rows.length;
+        const keys = Object.keys(fields || {});
+        const out = rows.slice(0, cap).map((el) => {
+          if (!keys.length) return { text: (el.innerText || "").trim() };
+          const o = {};
+          for (const k of keys) {
+            const sub = fields[k];
+            const n = !sub || sub === "." ? el : el.querySelector(sub);
+            o[k] = n ? (n.innerText || n.value || "").trim() : "";
+          }
+          return o;
+        });
+        return JSON.stringify({ count: rows.length, rows: out });
+      } catch (e) {
+        return "ERR: " + (e && e.message ? e.message : e);
+      }
+    },
+    args: [sel || "", fields || {}, limit || 0],
+  });
+  const out = res && res.result;
+  if (typeof out === "string" && out.indexOf("ERR: ") === 0) return { value: out };
+  return { value: out };
 }
 
 // Attach cleanly: if a stale attachment is lingering (e.g. a prior dispatch
@@ -246,19 +377,341 @@ async function consoleLogs(tabId, ms = 1800) {
   }
 }
 
+// ---- workflow recording ---------------------------------------------------
+// Passive capture of a task you do once, in two decoupled layers:
+//   • skeleton — navigations + tab switches, from reliable WebExtension events
+//     (tabs.onUpdated / onActivated / webNavigation). Never races, never needs
+//     the debugger. This alone segments the workflow into steps.
+//   • enrichment — the API calls (XHR/Fetch/Document) inside each step, from the
+//     CDP Network domain. Best-effort: if the debugger attaches a beat late and
+//     misses a page's load, the skeleton still has the step.
+// The write calls (POST/PUT/PATCH/DELETE) are the actions that matter; the
+// skeleton tells you where they happened. Handle persists it; Claude reads it
+// later (/record-workflow). Nothing drives the page.
+//
+// MV3 note: the service worker is suspended between events, so its in-memory
+// state cannot be trusted across two events. Two rules make capture survive it:
+//   1. The "am I recording" flag and the attached-tab set live in
+//      chrome.storage.session, not module memory — every event reads the flag.
+//   2. Events are NOT buffered in the worker. Each one is POSTed to the server
+//      immediately, so the server (recorder.py) is the only accumulator and a
+//      suspend can never strand a buffer.
+const REC_TYPES = new Set(["XHR", "Fetch", "Document"]);  // skip static assets
+const REC_WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);  // capture body for these
+// keys whose values are redacted before a body ever touches disk
+const REC_SECRET = /pass(word)?|secret|token|authorization|^auth$|bearer|ssn|cvv|otp|card(num|number)?|api[-_]?key|client[-_]?secret|cookie/i;
+
+// Redact sensitive values and cap size, so a recorded body is safe to persist.
+function recRedactBody(body) {
+  if (!body) return "";
+  let s = String(body).slice(0, 8192);
+  try {
+    const walk = (v) => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") {
+        for (const k of Object.keys(v)) {
+          if (REC_SECRET.test(k)) v[k] = "***";
+          else walk(v[k]);
+        }
+      }
+    };
+    const o = JSON.parse(s);
+    walk(o);
+    return JSON.stringify(o).slice(0, 4096);
+  } catch (e) {
+    // not JSON (form-encoded / raw) — redact obvious sensitive pairs
+    return s
+      .replace(/((?:pass(?:word)?|secret|token|auth|bearer|ssn|cvv|otp|api[-_]?key)[^=&]*=)[^&]*/gi, "$1***")
+      .replace(/("(?:pass(?:word)?|secret|token|auth|bearer|ssn|cvv|otp|api[-_]?key)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"***"')
+      .slice(0, 4096);
+  }
+}
+
+async function recIsOn() {
+  try { return !!(await chrome.storage.session.get("rec_on")).rec_on; }
+  catch (e) { return false; }
+}
+
+// POST one event immediately if a recording is active. No worker-memory buffer.
+async function recPush(ev) {
+  if (!(await recIsOn())) return;
+  try {
+    await fetch(`${HANDLE}/ext/record`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events: [ev] }),
+    });
+  } catch (e) { /* server gone — drop; capture is best-effort */ }
+}
+
+// --- skeleton: reliable nav + tab events (no debugger, never races) ---
+async function recNav(tabId, url) {
+  if (!url || !/^https?:/.test(url)) return;
+  await recPush({ t: Date.now(), type: "nav", tabId, url });
+}
+
+async function recTabSwitch(tabId) {
+  if (!(await recIsOn())) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab && /^https?:/.test(tab.url || "")) {
+    await recPush({ t: Date.now(), type: "tab", tabId,
+      url: tab.url || "", title: tab.title || "" });
+  }
+  recAttach(tabId);  // enrich this tab too (best-effort)
+}
+
+// --- enrichment: CDP Network events (best-effort) ---
+function recOnEvent(src, method, params) {
+  if (src.tabId == null) return;
+  const tabId = src.tabId;
+  if (method === "Network.requestWillBeSent") {
+    if (!REC_TYPES.has(params.type)) return;
+    const req = params.request || {};
+    const m = (req.method || "").toUpperCase();
+    const ev = { t: Date.now(), type: "request", tabId, reqId: params.requestId,
+      method: m, url: req.url || "", rtype: params.type };
+    // for state-changing calls, capture the payload — the data you submitted
+    if (REC_WRITES.has(m)) {
+      if (req.postData) {
+        ev.body = recRedactBody(req.postData);
+      } else if (req.hasPostData) {
+        // body too large to ride inline — fetch it explicitly, then push
+        chrome.debugger.sendCommand({ tabId }, "Network.getRequestPostData",
+          { requestId: params.requestId })
+          .then((r) => recPush({ ...ev, body: recRedactBody(r && r.postData) }))
+          .catch(() => recPush(ev));
+        return;
+      }
+    }
+    recPush(ev);
+  } else if (method === "Network.responseReceived") {
+    if (!REC_TYPES.has(params.type)) return;
+    const r = params.response || {};
+    recPush({ t: Date.now(), type: "response", tabId, reqId: params.requestId,
+      status: r.status, mime: r.mimeType || "", url: r.url || "" });
+  }
+}
+
+// attached-tab set persisted in storage.session so stop can detach across a wake
+async function recAttachedTabs() {
+  try { return (await chrome.storage.session.get("rec_tabs")).rec_tabs || []; }
+  catch (e) { return []; }
+}
+
+async function recAttach(tabId) {
+  if (!(await recIsOn())) return;
+  const attached = await recAttachedTabs();
+  if (attached.includes(tabId)) return;
+  try {
+    await attachClean({ tabId });
+    await chrome.debugger.sendCommand({ tabId }, "Network.enable");
+    attached.push(tabId);
+    await chrome.storage.session.set({ rec_tabs: attached });
+  } catch (e) { /* chrome:// or another debugger holds it — skeleton still covers it */ }
+}
+
+async function recDetachAll() {
+  const attached = await recAttachedTabs();
+  for (const tabId of attached) {
+    try { await chrome.debugger.detach({ tabId }); } catch (e) {}
+  }
+  try { await chrome.storage.session.set({ rec_tabs: [] }); } catch (e) {}
+}
+
+async function startRecording() {
+  if (await recIsOn()) return { recording: true, note: "already recording" };
+  try { await chrome.storage.session.set({ rec_on: true, rec_tabs: [] }); } catch (e) {}
+  try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active) await recTabSwitch(active.id);
+  } catch (e) {}
+  return { recording: true };
+}
+
+async function stopRecording() {
+  if (!(await recIsOn())) return { recording: false };
+  try { await chrome.storage.session.set({ rec_on: false }); } catch (e) {}
+  await recDetachAll();
+  return { recording: false };
+}
+
+// After a worker wake mid-session, re-attach the active tab so enrichment
+// resumes. The flag itself is in storage, so the skeleton never needed restoring.
+async function recRestore() {
+  if (!(await recIsOn())) return;
+  try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active) recAttach(active.id);
+  } catch (e) {}
+}
+
 async function dispatch(cmd) {
   const { method, params = {} } = cmd;
   const tabId = params.tab_id;
   switch (method) {
-    case "read": return await readTab(tabId);
+    case "read": return await withTimeout(readTab(tabId), 12000, "read");
     case "eval": return await evalIn(tabId, params.expression || "");
     case "click": return await clickIn(tabId, params.sel, params.text);
     case "type": return await typeIn(tabId, params.sel, params.text, params.submit);
+    case "resolve": return await resolveEls(tabId, params.intent || "");
+    case "scroll": return await scrollIn(tabId, params.dy || 2000);
+    case "harvest": return await withTimeout(harvestIn(tabId, params.sel || "", params.fields || {}, params.limit || 0), 12000, "harvest");
     case "screenshot": return await withTimeout(screenshot(tabId), 8000, "screenshot");
     case "console": return await withTimeout(consoleLogs(tabId, params.ms || 1800), (params.ms || 1800) + 6000, "console");
+    case "record_start": return await startRecording();
+    case "record_stop": return await stopRecording();
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };
   }
+}
+
+// ---- passive capture ------------------------------------------------------
+// The index was only ever as good as its corpus, and the corpus only grew when
+// an agent ran `tab read`. So: watch which tab is actually focused, and once
+// you've stayed on it long enough to have really read it, extract the readable
+// text and hand it to the server. Same FTS5 index, no extra effort.
+//
+// The policy (dwell bar, exclusions) is owned by capture.py and pulled from
+// /ext/policy. It is applied HERE, before any text is extracted — so an excluded
+// domain's content is never read out of the page at all, let alone sent. The
+// server re-checks on ingest; both sides have to agree before anything is stored.
+
+let POLICY = null;         // null until first fetch → capture stays off
+let POLICY_AT = 0;
+const FOCUS = { tabId: null, url: "", since: 0, captured: false };
+
+async function fetchPolicy() {
+  if (Date.now() - POLICY_AT < 60000) return POLICY;
+  try {
+    const r = await fetch(`${HANDLE}/ext/policy`);
+    POLICY = await r.json();
+    POLICY_AT = Date.now();
+  } catch (e) { /* server down → POLICY stays as-is; capture just pauses */ }
+  return POLICY;
+}
+
+// Mirrors capture.excluded_by() exactly: a term with no slash matches the HOST,
+// a term with one matches host+path. Keep the two in step — the server re-checks,
+// so a mismatch shows up as text extracted and then thrown away.
+function capExcluded(url) {
+  if (!POLICY || !POLICY.enabled) return true;
+  const u = (url || "").toLowerCase();
+  if (!u.startsWith("http")) return true;
+  let host, hostpath;
+  try {
+    const p = new URL(u);
+    host = p.hostname;
+    hostpath = p.hostname + p.pathname;
+  } catch (e) { return true; }
+  const hit = (POLICY.exclude || []).some((t) => {
+    const term = String(t).toLowerCase();
+    if (!term) return false;
+    return (term.includes("/") ? hostpath : host).includes(term);
+  });
+  if (hit) return true;
+  // Junk kinds: pages with plenty of text but no content (search results, video,
+  // infinite feeds, shopping). They'd clear any character floor and then degrade
+  // every query. Patterns come from capture.py so both sides skip the same pages.
+  const junk = (POLICY && POLICY.junk) || {};
+  for (const kind of Object.keys(junk)) {
+    for (const pat of junk[kind]) {
+      try { if (new RegExp(pat).test(u)) return true; } catch (e) {}
+    }
+  }
+  return false;
+}
+
+// Readability in the page: strip the chrome, score containers by how much real
+// paragraph text they hold, return the winner's innerText. Cheap enough to run
+// on a page you're already looking at (it clones once and only walks blocks).
+async function extractReadable(tabId) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (!document.body || document.visibilityState === "hidden") return null;
+      const body = document.body.cloneNode(true);
+      body.querySelectorAll(
+        "script,style,noscript,svg,iframe,form,nav,header,footer,aside," +
+        "[role=navigation],[role=banner],[role=complementary],[aria-hidden=true]"
+      ).forEach((el) => el.remove());
+      let best = null, bestScore = 0;
+      const blocks = body.querySelectorAll("main,article,[role=main],div,section");
+      for (const el of blocks) {
+        let score = 0;
+        for (const p of el.querySelectorAll(":scope > p, :scope > li, :scope > h1, :scope > h2, :scope > h3")) {
+          const n = (p.innerText || "").trim().length;
+          if (n > 40) score += n;
+        }
+        if (el.tagName === "MAIN" || el.tagName === "ARTICLE") score *= 2;
+        if (score > bestScore) { bestScore = score; best = el; }
+      }
+      const target = bestScore > 400 ? best : body;
+      const text = (target.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
+      return { title: document.title, url: location.href, text: text.slice(0, 200000) };
+    },
+  });
+  return res && res.result;
+}
+
+// Capture the tab we're leaving (or the one we've sat on long enough), if it
+// cleared the dwell bar and we haven't already stored it this visit.
+async function maybeCapture(rec) {
+  if (!rec || !rec.tabId || rec.captured || !rec.since) return;
+  const policy = await fetchPolicy();
+  if (!policy || !policy.enabled) return;
+  const dwell = Date.now() - rec.since;
+  if (dwell < (policy.min_dwell_ms || 20000)) return;
+  if (capExcluded(rec.url)) return;
+  let tab;
+  try { tab = await chrome.tabs.get(rec.tabId); } catch (e) { return; }
+  if (tab.incognito) return;              // incognito is never indexed
+  if (tab.url !== rec.url) return;        // navigated away mid-flight; next visit gets it
+
+  rec.captured = true;  // set before the await so a concurrent tick can't double-send
+  let page;
+  try { page = await withTimeout(extractReadable(rec.tabId), 8000, "capture"); }
+  catch (e) { rec.captured = false; return; }
+  if (!page || !page.text || page.text.length < (policy.min_chars || 500)) return;
+  if (capExcluded(page.url)) return;      // re-check the URL the page reports
+
+  try {
+    await fetch(`${HANDLE}/ext/index`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: page.url, title: page.title, text: page.text, dwell_ms: dwell,
+      }),
+    });
+  } catch (e) { /* server down — the page gets another chance next visit */ }
+}
+
+// Move the focus pointer to a new (tab, url). Flushes the one we're leaving.
+async function focusOn(tabId, url) {
+  if (FOCUS.tabId === tabId && FOCUS.url === url) {
+    // Same page we were already on. If the clock was stopped (Chrome had lost
+    // focus), restart it — otherwise alt-tabbing away and back to a tab you
+    // never actually left would leave `since` at 0, and that page could never
+    // accrue dwell again.
+    if (!FOCUS.since && !FOCUS.captured) FOCUS.since = Date.now();
+    return;
+  }
+  const leaving = { ...FOCUS };
+  FOCUS.tabId = tabId; FOCUS.url = url || ""; FOCUS.since = tabId ? Date.now() : 0;
+  FOCUS.captured = false;
+  maybeCapture(leaving);
+}
+
+async function focusCurrent() {
+  try {
+    const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (t && t.url) focusOn(t.id, t.url);
+  } catch (e) {}
+}
+
+// The periodic tick: catches the long read you never navigate away from.
+function captureTick() {
+  fetchPolicy();
+  maybeCapture(FOCUS);
 }
 
 // ---- long-poll loop (self-healing) ----------------------------------------
@@ -315,24 +768,60 @@ function ensurePolling() {
 }
 
 // ---- lifecycle ------------------------------------------------------------
-function kick() { syncTabs(); ensurePolling(); }
+function kick() { syncTabs(); ensurePolling(); recRestore(); focusCurrent(); }
 
 chrome.runtime.onStartup.addListener(kick);
 chrome.runtime.onInstalled.addListener(kick);
 
-// 30s alarm is the backstop that revives a suspended worker
+// 30s alarm is the backstop that revives a suspended worker — and the tick that
+// captures a page you're still sitting on and never navigate away from
 chrome.alarms.create("handle-keepalive", { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener(kick);
+chrome.alarms.onAlarm.addListener(() => { kick(); captureTick(); });
+
+// Leaving the browser entirely still counts as finishing a read — flush first.
+chrome.windows.onFocusChanged.addListener((winId) => {
+  if (winId === chrome.windows.WINDOW_ID_NONE) {
+    maybeCapture(FOCUS);
+    FOCUS.since = 0;              // stop the clock while Chrome is in the background
+  } else {
+    focusCurrent();
+  }
+});
+
+// CDP Network events (recording enrichment) — registered at top level so it
+// survives a service-worker wake; gated by REC.on inside the handler.
+chrome.debugger.onEvent.addListener(recOnEvent);
 
 // any tab activity both re-syncs AND revives the poll loop
 const reSync = () => { syncTabs(); ensurePolling(); };
 chrome.tabs.onCreated.addListener(reSync);
-chrome.tabs.onRemoved.addListener(reSync);
-chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete" || info.title || info.url) reSync(); });
+chrome.tabs.onRemoved.addListener((id) => {
+  reSync();
+  // can't extract from a tab that's gone; a long read was already caught by the tick
+  if (FOCUS.tabId === id) { FOCUS.tabId = null; FOCUS.since = 0; }
+});
+chrome.tabs.onUpdated.addListener((id, info) => {
+  if (info.status === "complete" || info.title || info.url) reSync();
+  // recording skeleton: a real URL change is a navigation (full + SPA pushState)
+  if (info.url) recNav(id, info.url);
+  // navigating the focused tab ends one read and starts another
+  if (info.url && id === FOCUS.tabId) focusOn(id, info.url);
+});
 chrome.tabs.onActivated.addListener(reSync);
+// recording skeleton: follow the user across tabs (records the switch + enriches)
+chrome.tabs.onActivated.addListener((info) => { recTabSwitch(info.tabId); });
+// passive capture: the tab you switch TO starts a dwell clock; the one you left gets flushed
+chrome.tabs.onActivated.addListener(async (info) => {
+  try {
+    const t = await chrome.tabs.get(info.tabId);
+    if (t && t.url) focusOn(t.id, t.url);
+  } catch (e) {}
+});
 if (chrome.tabGroups) {
   chrome.tabGroups.onUpdated.addListener(reSync);
   chrome.tabGroups.onRemoved.addListener(reSync);
 }
+
+recRestore();  // in case the worker woke without an onStartup/alarm
 
 kick();

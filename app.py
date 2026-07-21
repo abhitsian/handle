@@ -25,6 +25,10 @@ from urllib.parse import parse_qs, quote, urlparse
 import collect as collector
 import workspaces
 import extbridge
+import recorder
+import stash
+import capture
+import webindex
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
@@ -252,8 +256,31 @@ HEAD = """<!doctype html>
   .toggle button + button { border-left:1px solid var(--line); }
   .toggle button.on { background:var(--accent); color:#fff; }
   .btn { border:1px solid var(--accent); background:var(--accent); color:#fff;
-         padding:9px 14px; border-radius:8px; font:600 12px/1 inherit; cursor:pointer; }
+         padding:9px 14px; border-radius:8px; font:600 12px/1 inherit; cursor:pointer;
+         text-decoration:none; display:inline-flex; align-items:center; }
   .btn:active { transform:translateY(1px); }
+  .btn.ghost { background:var(--card); color:var(--accent); }
+  .cap { margin:20px 0 4px; padding:16px 18px; background:var(--card);
+         border:1px solid var(--line); border-radius:10px; }
+  .cap-head { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .cap-dot { width:7px; height:7px; border-radius:50%; background:var(--mut); }
+  .cap-dot.on { background:var(--accent); }
+  .cap-sub { color:var(--mut); font-size:12px; }
+  .cap-nums { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; margin:12px 0 4px; }
+  .cap-big { font-size:24px; font-weight:600; letter-spacing:-0.02em; }
+  .cap-lbl { color:var(--mut); font-size:12px; margin-right:4px; }
+  .cap-sep { color:var(--line); margin:0 6px; }
+  .cap-list { list-style:none; margin:12px 0 0; padding:12px 0 0; border-top:1px solid var(--line); }
+  .cap-list li { display:flex; justify-content:space-between; gap:12px; padding:3px 0;
+                 font-size:13px; }
+  .cap-list a { color:var(--ink); text-decoration:none; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap; }
+  .cap-list a:hover { color:var(--accent); }
+  .cap-k { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
+  .cap-none { color:var(--mut); font-size:13px; margin:10px 0 0; }
+  .cap-foot { color:var(--mut); font-size:12px; margin:12px 0 0; }
+  .cap code { background:var(--bg); border:1px solid var(--line); padding:1px 6px;
+              border-radius:5px; font-size:12px; }
   .banner { border-radius:10px; padding:12px 14px; font-size:13px; margin:18px 0 4px; }
   .banner.info { background:#eef4f3; border:1px solid #cfe1de; }
   .banner.act  { background:#f3eee2; border:1px solid #e6dcc4; color:#6b5d36; }
@@ -581,6 +608,174 @@ def _render_section(s: dict, all_clusters: list, group_by: str,
     return head + body + "</section>"
 
 
+def render_capture(v: dict) -> str:
+    """The corpus strip — what passive capture has learned while you browsed.
+
+    The board's whole job is to make the invisible legible, and passive capture is
+    the most invisible thing Handle does: it runs with no command and no output.
+    Without a surface you'd have no idea whether it was working, or what it took.
+    """
+    try:
+        st = capture.status()
+        recent = webindex.recent(limit=5, source="passive")
+    except Exception:
+        return ""
+    if not st.get("enabled") and not st.get("pages"):
+        return ""
+
+    dwell = st["min_dwell_ms"] // 1000
+    state = ("on" if st["enabled"] else "off")
+    rows = "".join(
+        f'<li><a href="{esc(r["url"])}" target="_blank">{esc(r["title"] or r["url"])[:72]}</a>'
+        f'<span class="cap-k">{r["chars"] // 1000}k</span></li>'
+        for r in recent
+    )
+    if recent:
+        body = f'<ul class="cap-list">{rows}</ul>'
+    elif st["enabled"]:
+        body = ('<p class="cap-none">Nothing captured yet &mdash; read a page for '
+                f'{dwell}s and it lands here.</p>')
+    else:
+        body = '<p class="cap-none">Turned off. <code>tab capture on</code></p>'
+
+    return (
+        '<section class="cap">'
+        f'<div class="cap-head"><b>Passive capture</b>'
+        f'<span class="cap-dot {state}"></span>'
+        f'<span class="cap-sub">{dwell}s dwell &middot; {st["exclusions"]} exclusions</span></div>'
+        f'<div class="cap-nums">'
+        f'<span class="cap-big">{st["pages"]}</span><span class="cap-lbl">pages indexed</span>'
+        f'<span class="cap-sep">&middot;</span>'
+        f'<span class="cap-big">{st["passive"]}</span><span class="cap-lbl">captured while you browsed</span>'
+        f'<span class="cap-sep">&middot;</span>'
+        f'<span class="cap-big">{st["today"]}</span><span class="cap-lbl">today</span>'
+        f'</div>{body}'
+        '<p class="cap-foot">Search it from Claude Code: <code>tab search "&hellip;"</code></p>'
+        '</section>'
+    )
+
+
+INDEX_STYLE = """
+<style>
+  /* min-width:0 on the fluid column is load-bearing: a 1fr track refuses to
+     shrink below its content's min-width, and one long un-breakable URL would
+     otherwise push the whole page into a horizontal scroll. */
+  .ix { display:grid; grid-template-columns:230px minmax(0,1fr); gap:22px; margin-top:20px; }
+  .ix > * { min-width:0; }
+  .ix-sites { list-style:none; margin:0; padding:0; font-size:13px; }
+  .ix-sites li a { display:flex; justify-content:space-between; gap:8px; align-items:baseline;
+                   padding:6px 9px; border-radius:7px; color:var(--ink); text-decoration:none; }
+  .ix-sites li a:hover { background:var(--card); }
+  .ix-sites li a.on { background:var(--accent); color:#fff; }
+  .ix-sites li a.on .ix-n { color:#cfe4e1; }
+  .ix-host { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ix-n { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
+  .ix-search { display:flex; gap:8px; margin-bottom:14px; }
+  .ix-search input { flex:1; padding:9px 12px; border:1px solid var(--line);
+                     border-radius:8px; font:14px inherit; background:var(--card); }
+  .ix-row { background:var(--card); border:1px solid var(--line); border-radius:9px;
+            padding:11px 14px; margin-bottom:8px; min-width:0; overflow:hidden; }
+  .ix-row a.t { color:var(--ink); text-decoration:none; font-weight:600; font-size:14px;
+                display:block; overflow-wrap:anywhere; }
+  .ix-row a.t:hover { color:var(--accent); }
+  .ix-meta { color:var(--mut); font-size:11.5px; margin-top:3px;
+             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ix-snip { font-size:12.5px; color:#5f5b53; margin-top:6px; }
+  .ix-snip b { background:#f3eee2; font-weight:600; }
+  .ix-tag { font-size:10px; border:1px solid var(--line); border-radius:4px;
+            padding:1px 5px; color:var(--mut); margin-right:6px; }
+  .ix-bar { display:flex; justify-content:space-between; align-items:center;
+            margin-bottom:12px; font-size:12.5px; color:var(--mut); }
+  .ix-forget { border:1px solid #e6c4b8; background:#fbeeea; color:#8a3b22;
+               font:600 11px/1 inherit; padding:6px 10px; border-radius:7px; cursor:pointer; }
+  @media (max-width:720px) { .ix { grid-template-columns:1fr; } }
+</style>
+"""
+
+
+def render_index(domain: str = "", q: str = "", source: str = "") -> str:
+    """The corpus, browsable. Passive capture is silent by construction, so the
+    only honest way to run it is to make what it took inspectable — every site,
+    every page, and a one-click way to throw a site back out."""
+    doms = webindex.domains()
+    rows = webindex.pages(domain=domain or None, source=source or None,
+                          q=q or None, limit=150)
+    st = webindex.stats()
+
+    def qs(**kw):
+        p = {"domain": domain, "q": q, "source": source}
+        p.update(kw)
+        return "/index?" + "&".join(f"{k}={quote(v)}" for k, v in p.items() if v)
+
+    out = [HEAD, INDEX_STYLE, '<div class="wrap">',
+           '<header><div><h1>Index</h1>'
+           f'<p class="sub">{st["pages"]} pages &middot; {st["passive"]} captured as you '
+           f'browsed &middot; {st["read"]} read by an agent &middot; {st.get("db_mb", 0)} MB</p></div>'
+           '<div class="head-right">'
+           '<a class="btn ghost" href="/">&larr; Tabs</a></div></header>']
+
+    out.append('<div class="ix"><div>')
+    out.append(f'<ul class="ix-sites"><li><a href="{qs(domain="")}" '
+               f'class="{"on" if not domain else ""}"><span class="ix-host">All sites</span>'
+               f'<span class="ix-n">{st["pages"]}</span></a></li>')
+    for d in doms:
+        on = "on" if d["domain"] == domain else ""
+        out.append(f'<li><a class="{on}" href="{qs(domain=d["domain"])}">'
+                   f'<span class="ix-host">{esc(d["domain"])}</span>'
+                   f'<span class="ix-n">{d["pages"]}</span></a></li>')
+    out.append('</ul></div><div>')
+
+    out.append(f'<form class="ix-search" method="get" action="/index">'
+               f'<input type="hidden" name="domain" value="{esc(domain)}">'
+               f'<input name="q" value="{esc(q)}" placeholder="Search the full text of everything you\'ve read&hellip;" autofocus>'
+               f'<button class="btn" type="submit">Search</button></form>')
+
+    out.append('<div class="ix-bar"><span>')
+    if q:
+        out.append(f'{len(rows)} hit{"" if len(rows) == 1 else "s"} for &ldquo;{esc(q)}&rdquo;')
+    else:
+        out.append(f'{len(rows)} page{"" if len(rows) == 1 else "s"}')
+    if domain:
+        out.append(f' in <b>{esc(domain)}</b>')
+    out.append('</span>')
+    if domain:
+        out.append(f'<button class="ix-forget" data-domain="{esc(domain)}">'
+                   f'Forget {esc(domain)} &amp; stop indexing it</button>')
+    out.append('</div>')
+
+    if not rows:
+        out.append('<div class="empty">Nothing here yet.</div>')
+    for r in rows:
+        tag = "captured" if r.get("source") == "passive" else "agent-read"
+        snip = r.get("snippet") or ""
+        snip = esc(snip).replace("«", "<b>").replace("»", "</b>") if snip else ""
+        out.append(
+            f'<div class="ix-row"><a class="t" href="{esc(r["url"])}" target="_blank">'
+            f'{esc(r["title"] or r["url"])}</a>'
+            f'<div class="ix-meta"><span class="ix-tag">{tag}</span>'
+            f'{esc(r["ts"][:10])} &middot; {r.get("chars", 0) // 1000}k &middot; {esc(r["url"])}</div>'
+            + (f'<div class="ix-snip">&hellip;{snip}&hellip;</div>' if snip else "")
+            + '</div>')
+
+    out.append('</div></div>')
+    out.append("""
+<script>
+document.querySelectorAll('.ix-forget').forEach(function (b) {
+  b.addEventListener('click', async function () {
+    var d = b.dataset.domain;
+    if (!confirm('Delete every page from ' + d + ' out of the index, and never index it again?')) return;
+    b.disabled = true; b.textContent = 'Forgetting…';
+    await fetch('/api/capture/forget', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: d }),
+    });
+    location.href = '/index';
+  });
+});
+</script></div>""")
+    return "".join(out)
+
+
 def render_page(v: dict, error: str | None = None) -> str:
     out = [HEAD, '<div class="wrap">']
     total = v["total"]
@@ -599,10 +794,15 @@ def render_page(v: dict, error: str | None = None) -> str:
         '<div class="head-right"><div class="toggle">'
         + _tog("task", "Task") + _tog("initiative", "Initiative")
         + _tog("workstream", "Workstream") + _tog("window", "Window")
-        + '</div><form method="post" action="/api/refresh">'
+        + '</div><a class="btn ghost" href="/index" '
+        'title="Everything you have read, searchable">&#9636; Index</a>'
+        '<a class="btn ghost" href="/stash" '
+        'title="Your curated link library">&#9733; Stash</a>'
+        '<form method="post" action="/api/refresh">'
         '<button class="btn" type="submit">&#8635; Refresh</button>'
         '</form></div></header>'
     )
+    out.append(render_capture(v))
     parked = v.get("parked", {})
     if parked:
         chips = "".join(
@@ -664,6 +864,244 @@ def render_page(v: dict, error: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------
+# stash view — the curated link library
+# --------------------------------------------------------------------------
+_SRC_EMOJI = {
+    "SharePoint": "\U0001F4C4", "OneDrive": "\U0001F4C4", "Google Drive": "\U0001F4DD",
+    "Figma": "\U0001F3A8", "Notion": "\U0001F4D4", "Confluence": "\U0001F4D8",
+    "Jira": "\U0001F9E9", "GitHub": "\U0001F419", "Loom": "\U0001F3A5",
+    "Miro": "\U0001F5FA️", "Box": "\U0001F4E6", "Dropbox": "\U0001F4E6", "Web": "\U0001F517",
+}
+
+STASH_STYLE = """
+<style>
+  .sbar { display:flex; gap:10px; margin:20px 0 6px; flex-wrap:wrap; }
+  .sbar input.q { flex:1; min-width:200px; border:1px solid var(--line);
+     border-radius:8px; padding:10px 12px; font:14px inherit; background:var(--card); }
+  .addrow { display:flex; gap:8px; margin:14px 0 4px; }
+  .addrow input { flex:1; border:1px solid var(--line); border-radius:8px;
+     padding:10px 12px; font:14px inherit; background:var(--card); }
+  .chips { display:flex; gap:7px; flex-wrap:wrap; margin:14px 0 6px; }
+  .chip { border:1px solid var(--line); background:var(--card); color:var(--mut);
+     padding:6px 11px; border-radius:20px; font:600 12px/1 inherit; cursor:pointer; }
+  .chip.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .link { background:var(--card); border:1px solid var(--line); border-radius:11px;
+     padding:13px 15px; margin:9px 0; display:flex; gap:12px; align-items:flex-start; }
+  .link .emoji { font-size:19px; line-height:1.2; }
+  .link .body { flex:1; min-width:0; }
+  .link a.tt { font-weight:600; color:var(--ink); text-decoration:none; font-size:15px; }
+  .link a.tt:hover { color:var(--accent); text-decoration:underline; }
+  .link .url { color:var(--mut); font-size:12px; margin-top:3px; overflow:hidden;
+     text-overflow:ellipsis; white-space:nowrap; }
+  .link .meta { margin-top:6px; font-size:12px; color:var(--mut); display:flex;
+     gap:8px; flex-wrap:wrap; align-items:center; }
+  .link .src { color:var(--accent); font-weight:600; }
+  .tag { background:#eef4f3; border:1px solid #cfe1de; color:#3d5f5b;
+     padding:1px 8px; border-radius:20px; font-size:11px; }
+  .link .snote { font-style:italic; }
+  .link .acts { display:flex; gap:6px; align-items:center; }
+  .iconbtn { border:none; background:none; cursor:pointer; font-size:15px;
+     color:var(--mut); padding:2px 4px; border-radius:6px; }
+  .iconbtn:hover { background:var(--bg); }
+  .iconbtn.star.on { color:var(--amber); }
+  .sug { background:#f3eee2; border:1px solid #e6dcc4; border-radius:11px;
+     padding:11px 14px; margin:9px 0; display:flex; gap:12px; align-items:flex-start; }
+  .sug .body { flex:1; min-width:0; }
+  .sug .keep { border:1px solid var(--accent); background:var(--accent); color:#fff;
+     padding:6px 12px; border-radius:7px; font:600 12px/1 inherit; cursor:pointer; }
+  .sug .dismiss { border:1px solid var(--line); background:var(--card); color:var(--mut);
+     padding:6px 12px; border-radius:7px; font:600 12px/1 inherit; cursor:pointer; }
+  .subhead { font-size:12px; text-transform:uppercase; letter-spacing:0.07em;
+     color:var(--mut); margin:26px 0 4px; }
+  .muted { color:var(--mut); font-size:13px; }
+</style>
+"""
+
+
+def _stash_link_html(r: dict) -> str:
+    emoji = _SRC_EMOJI.get(r.get("source", "Web"), "\U0001F517")
+    url = r["url"]
+    title = esc(r.get("title") or url)
+    tags = "".join(f'<span class="tag">{esc(t)}</span>' for t in r.get("tags", []))
+    note = f'<span class="snote">&laquo;{esc(r["note"])}&raquo;</span>' if r.get("note") else ""
+    opens = f'<span>{r["open_count"]}&times; opened</span>' if r.get("open_count") else ""
+    ws = f'<span class="tag">{esc(r["workstream"])}</span>' if r.get("workstream") else ""
+    starred = "on" if r.get("starred") else ""
+    star_glyph = "★" if r.get("starred") else "☆"
+    hay = " ".join([r.get("title", ""), url, r.get("note", ""),
+                    " ".join(r.get("tags", [])), r.get("source", "")]).lower()
+    return (
+        f'<div class="link" data-src="{esc(r.get("source", "Web"))}" '
+        f'data-hay="{esc(hay)}">'
+        f'<div class="emoji">{emoji}</div>'
+        f'<div class="body">'
+        f'<a class="tt" href="{esc(url)}" target="_blank" rel="noreferrer" '
+        f'data-url="{esc(url)}">{title}</a>'
+        f'<div class="url">{esc(url)}</div>'
+        f'<div class="meta"><span class="src">{esc(r.get("source", "Web"))}</span>'
+        f'{ws}{tags}{note}{opens}</div></div>'
+        f'<div class="acts">'
+        f'<button class="iconbtn star {starred}" data-url="{esc(url)}" '
+        f'title="Star">{star_glyph}</button>'
+        f'<button class="iconbtn tagbtn" data-url="{esc(url)}" title="Add tag">#</button>'
+        f'<button class="iconbtn notebtn" data-url="{esc(url)}" title="Note">&#9998;</button>'
+        f'<button class="iconbtn rm" data-url="{esc(url)}" title="Remove">&times;</button>'
+        f'</div></div>'
+    )
+
+
+def _stash_sug_html(c: dict) -> str:
+    emoji = _SRC_EMOJI.get(c.get("source", "Web"), "\U0001F517")
+    return (
+        f'<div class="sug" data-url="{esc(c["url"])}">'
+        f'<div class="emoji">{emoji}</div>'
+        f'<div class="body"><b>{esc(c.get("title") or c["url"])}</b> '
+        f'<span class="muted">&middot; {esc(c.get("source", "Web"))} &middot; '
+        f'pasted {c.get("count", 1)}&times;</span>'
+        f'<div class="url">{esc(c["url"])}</div></div>'
+        f'<div class="acts">'
+        f'<button class="keep" data-url="{esc(c["url"])}" '
+        f'data-title="{esc(c.get("title", ""))}">Keep</button>'
+        f'<button class="dismiss" data-url="{esc(c["url"])}">Dismiss</button>'
+        f'</div></div>'
+    )
+
+
+def render_stash() -> str:
+    rows = stash.search(sort="recent")
+    counts = stash.source_counts()
+    try:
+        suggestions = stash.scan(days=7)
+    except Exception:
+        suggestions = []
+
+    out = [HEAD.replace("<title>Handle</title>", "<title>Stash &middot; Handle</title>"),
+           STASH_STYLE, '<div class="wrap">']
+    out.append(
+        '<header><div><h1>Stash</h1>'
+        f'<p class="sub">{len(rows)} kept link{"" if len(rows) == 1 else "s"} '
+        '&middot; SharePoint, Drive, Figma &amp; other docs you keep</p></div>'
+        '<div class="head-right"><a class="btn ghost" href="/">&larr; Tabs</a></div>'
+        '</header>'
+    )
+    # add box
+    out.append(
+        '<div class="addrow">'
+        '<input id="addurl" placeholder="Paste a URL to keep it — SharePoint, '
+        'Drive, Figma, Notion…" />'
+        '<button class="btn" id="addbtn">Keep</button></div>'
+    )
+    # suggestions from session scan (passive)
+    fresh = [c for c in suggestions]
+    if fresh:
+        out.append(f'<div class="subhead">Suggested from Chrome history &amp; your '
+                   f'sessions &middot; {len(fresh)} doc link'
+                   f'{"" if len(fresh) == 1 else "s"} you opened but never kept</div>')
+        for c in fresh:
+            out.append(_stash_sug_html(c))
+    # search + source filter chips
+    out.append('<div class="sbar"><input class="q" id="q" '
+               'placeholder="Search your stash…" /></div>')
+    if counts:
+        chips = ['<span class="chip on" data-src="">All</span>']
+        for src, n in counts.items():
+            chips.append(f'<span class="chip" data-src="{esc(src)}">'
+                         f'{esc(src)} {n}</span>')
+        out.append('<div class="chips">' + "".join(chips) + '</div>')
+    # links
+    if not rows:
+        out.append('<div class="empty" style="margin-top:20px">'
+                   'Nothing stashed yet.<br>Paste a URL above, or keep a suggestion, '
+                   'or run <code>tab stash add &lt;url&gt;</code>.</div>')
+    else:
+        out.append('<div id="links">')
+        for r in rows:
+            out.append(_stash_link_html(r))
+        out.append('</div>')
+    out.append('</div>')
+    out.append(STASH_SCRIPT)
+    return "".join(out)
+
+
+STASH_SCRIPT = """
+<script>
+function post(url, body, after) {
+  return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body) }).then(after || function(){ location.reload(); });
+}
+// add a link
+function doAdd() {
+  var el = document.getElementById('addurl');
+  var v = (el.value || '').trim();
+  if (!v) return;
+  post('/api/stash/add', { url: v });
+}
+document.getElementById('addbtn').addEventListener('click', doAdd);
+document.getElementById('addurl').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') doAdd();
+});
+// star / remove / tag / note
+document.querySelectorAll('.iconbtn.star').forEach(function(b){
+  b.addEventListener('click', function(){ post('/api/stash/star', { url: b.dataset.url }); });
+});
+document.querySelectorAll('.iconbtn.rm').forEach(function(b){
+  b.addEventListener('click', function(){
+    b.disabled = true; post('/api/stash/remove', { url: b.dataset.url }); });
+});
+document.querySelectorAll('.iconbtn.tagbtn').forEach(function(b){
+  b.addEventListener('click', function(){
+    var t = (prompt('Add tag(s), space-separated:') || '').trim();
+    if (!t) return;
+    post('/api/stash/tag', { url: b.dataset.url, tags: t.split(/\\s+/) }); });
+});
+document.querySelectorAll('.iconbtn.notebtn').forEach(function(b){
+  b.addEventListener('click', function(){
+    var n = prompt('Note:');
+    if (n === null) return;
+    post('/api/stash/note', { url: b.dataset.url, note: n }); });
+});
+// bump open-count when a stashed link is opened
+document.querySelectorAll('a.tt').forEach(function(a){
+  a.addEventListener('click', function(){
+    fetch('/api/stash/touch', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url: a.dataset.url }) }); });
+});
+// suggestions: keep / dismiss
+document.querySelectorAll('.sug .keep').forEach(function(b){
+  b.addEventListener('click', function(){
+    post('/api/stash/keep', { url: b.dataset.url, title: b.dataset.title }); });
+});
+document.querySelectorAll('.sug .dismiss').forEach(function(b){
+  b.addEventListener('click', function(){
+    var card = b.closest('.sug'); if (card) card.style.display='none';
+    fetch('/api/stash/dismiss', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url: b.dataset.url }) }); });
+});
+// client-side search + source filter
+var activeSrc = '';
+function applyFilter() {
+  var q = (document.getElementById('q').value || '').toLowerCase().trim();
+  var terms = q ? q.split(/\\s+/) : [];
+  document.querySelectorAll('#links .link').forEach(function(el){
+    var hay = el.dataset.hay || '';
+    var okSrc = !activeSrc || el.dataset.src === activeSrc;
+    var okQ = terms.every(function(t){ return hay.indexOf(t) !== -1; });
+    el.style.display = (okSrc && okQ) ? '' : 'none';
+  });
+}
+var qbox = document.getElementById('q');
+if (qbox) qbox.addEventListener('input', applyFilter);
+document.querySelectorAll('.chip').forEach(function(c){
+  c.addEventListener('click', function(){
+    document.querySelectorAll('.chip').forEach(function(x){ x.classList.remove('on'); });
+    c.classList.add('on'); activeSrc = c.dataset.src || ''; applyFilter();
+  });
+});
+</script>
+"""
+
+
+# --------------------------------------------------------------------------
 # server
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
@@ -700,6 +1138,14 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             error = parse_qs(parsed.query).get("error", [None])[0]
             self._send(200, render_page(build_view(), error))
+        elif parsed.path == "/stash":
+            self._send(200, render_stash())
+        elif parsed.path == "/index":
+            qp = parse_qs(parsed.query)
+            self._send(200, render_index(
+                domain=qp.get("domain", [""])[0],
+                q=qp.get("q", [""])[0],
+                source=qp.get("source", [""])[0]))
         elif parsed.path == "/api/state":
             payload = {
                 "state": collector.load_json(STATE_PATH, {}),
@@ -710,10 +1156,20 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json; charset=utf-8")
         elif parsed.path == "/ext/status":
             self._send(200, json.dumps(extbridge.status()), "application/json")
+        elif parsed.path == "/api/record/status":
+            self._send(200, json.dumps(recorder.status()), "application/json")
+        elif parsed.path == "/api/record/list":
+            self._send(200, json.dumps(recorder.listing()), "application/json")
         elif parsed.path == "/ext/poll":
             # extension long-polls here for the next live command
             cmd = extbridge.poll(wait=25.0)
             self._send(200, json.dumps(cmd or {}), "application/json")
+        elif parsed.path == "/ext/policy":
+            # passive capture rules — the extension applies these BEFORE it
+            # extracts any text, so excluded domains are never even read
+            self._send(200, json.dumps(capture.policy()), "application/json")
+        elif parsed.path == "/api/capture/status":
+            self._send(200, json.dumps(capture.status()), "application/json")
         else:
             self._send(404, "not found", "text/plain; charset=utf-8")
 
@@ -730,6 +1186,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         data = self._json_body()
+
+        # --- stash: the curated link library -------------------------------
+        if parsed.path.startswith("/api/stash/"):
+            self._stash_action(parsed.path.rsplit("/", 1)[-1], data)
+            return
 
         # --- Chrome extension bridge ---------------------------------------
         if parsed.path == "/ext/sync":
@@ -753,6 +1214,45 @@ class Handler(BaseHTTPRequestHandler):
                 data.get("method", ""), data.get("params", {}),
                 timeout=float(data.get("timeout", 20)))
             self._send(200, json.dumps(result), "application/json")
+            return
+        if parsed.path == "/ext/record":
+            # the extension streams CDP network/nav/tab events during a session
+            n = recorder.append(data.get("events", []))
+            self._send(200, json.dumps({"appended": n}), "application/json")
+            return
+        if parsed.path == "/api/capture/forget":
+            # throw a site out of the index AND stop it coming back: delete what's
+            # stored, then add the exclusion. Doing only one of the two is the
+            # mistake — forgetting without excluding just re-indexes it tomorrow.
+            dom = (data.get("domain") or "").strip()
+            n = webindex.forget(dom) if dom else 0
+            if dom:
+                capture.exclude_add(dom)
+            self._send(200, json.dumps({"forgotten": n, "excluded": dom}),
+                       "application/json")
+            return
+        if parsed.path == "/ext/index":
+            # passive capture: a page you dwelled on long enough to have read.
+            # capture.ingest re-checks the policy — the extension's filter is the
+            # first gate, this is the net under it.
+            res = capture.ingest(data.get("url", ""), data.get("title", ""),
+                                 data.get("text", ""), int(data.get("dwell_ms", 0)))
+            self._send(200, json.dumps(res), "application/json")
+            return
+
+        # --- workflow recorder control (CLI) -------------------------------
+        if parsed.path == "/api/record/start":
+            sess = recorder.start(data.get("label", ""))
+            # tell the extension to begin streaming (best-effort; capture is
+            # passive once it starts, so don't block long on the handshake)
+            ext = extbridge.enqueue("record_start", {}, timeout=8)
+            self._send(200, json.dumps({"session": sess, "ext": ext}),
+                       "application/json")
+            return
+        if parsed.path == "/api/record/stop":
+            extbridge.enqueue("record_stop", {}, timeout=8)
+            done = recorder.stop()
+            self._send(200, json.dumps({"session": done}), "application/json")
             return
 
         if parsed.path == "/api/action":
@@ -846,6 +1346,29 @@ class Handler(BaseHTTPRequestHandler):
             collector.close_tab(t["url"])
             tabs.pop(t["url"], None)
         collector.write_json(STATE_PATH, state)
+        self._ok()
+
+    def _stash_action(self, verb: str, data: dict):
+        url = (data.get("url") or "").strip()
+        if verb == "add" and url:
+            stash.add(url, title=data.get("title") or None,
+                      tags=data.get("tags") or [], note=data.get("note") or None,
+                      origin="board")
+        elif verb == "keep" and url:
+            stash.add(url, title=data.get("title") or None, origin="session")
+        elif verb == "remove" and url:
+            stash.remove(url)
+        elif verb == "dismiss" and url:
+            stash.dismiss(url)
+        elif verb == "star" and url:
+            cur = stash.load()["links"].get(url, {})
+            stash.set_star(url, not cur.get("starred"))
+        elif verb == "tag" and url:
+            stash.set_tags(url, data.get("tags") or [])
+        elif verb == "note" and url:
+            stash.set_note(url, data.get("note", ""))
+        elif verb == "touch" and url:
+            stash.touch(url)
         self._ok()
 
     def _queue_action(self, data: dict):

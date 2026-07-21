@@ -83,6 +83,14 @@ looking at."
     tab eval t49 "document.title"      # run JS in the page (MAIN world; a hard CSP may block)
     tab watch t49 --check "<js>" --every 30 --timeout 600 [--click <sel> --say "<msg>"]  # poll → act/notify when it fires
 
+    # scrape a Zoom cloud recording's built-in transcript → meetings/ (JSON + Markdown)
+    tab meeting <zoom /rec/share/ link> --passcode <code> [--first F --last L --email E]
+
+    # record a workflow → SOP + skill (the capability-recorder)
+    tab record start submit-expense  # passively capture navigations, tab switches, API calls
+    tab record stop                  # finalise → then /record-workflow turns it into an SOP
+    tab record list                  # past recordings
+
     # beyond your open tabs — Chrome's own data (titles + links, never content)
     tab history "datacenter" # query Chrome history; filter the results in plain language
     tab history "x" --searches  # the omnibox search terms you typed
@@ -142,6 +150,90 @@ screenshot it on a page where ordinary scripting is refused. Acting goes through
 the **extension** (the isolated-world injection lives there); `eval` is MAIN-world,
 so a hard CSP can still refuse it. Handle still acts only on the tabs you point
 it at, on your own logged-in Chrome.
+
+## Trust, safety & memory
+
+Because Handle acts inside your *real* authenticated session, the interesting
+problems are the ones autonomous, sandboxed browser agents keep hitting — login
+state, irreversibility, and hostile page content. Handle's answers, all local and
+deterministic (no API call):
+
+- **Irreversibility guard.** `click` / `type` classify the target; anything that
+  looks irreversible — Submit, Send, Pay, Delete, Approve, Post, or `type
+  --submit` — is **blocked** until you pass `--confirm`. A misfire can't quietly
+  submit an order or send a message.
+- **Self-healing selectors.** `click --intent "Approve"` finds the element by what
+  it *means* (text / role / aria), caches the selector that worked, and re-finds
+  it by intent when the page's markup drifts — so an operator doesn't break the
+  first time a class name changes. Ambiguous? It returns ranked candidates.
+- **Prompt-injection defense.** Page text is untrusted. `read` scans it for
+  injection ("ignore previous instructions", hidden-comment payloads, "email X…")
+  and flags it; `--fenced` wraps the whole page as clearly-delimited *data* the
+  agent won't mistake for instructions.
+- **Attribution.** Every action is appended to an audit trail (`tab audit`) —
+  what Handle did, to which page, and whether a guard blocked or you confirmed it.
+  Secret-looking fields are redacted.
+- **Your logged-in web, searchable.** Every substantial page you read is indexed
+  locally (SQLite full-text, private). `tab search "<query>"` runs BM25 across
+  everything you've read — the SharePoint doc, the Confluence page, the Jira
+  ticket behind SSO that no external search can index, because it's *your* browser.
+
+## Passive capture — the index fills itself
+
+`tab search` is only as good as its corpus, and for a long time the corpus only
+grew when an agent happened to run `tab read`. That indexed a handful of pages a
+week while hundreds went past unrecorded.
+
+Passive capture closes that. The extension watches which tab is actually focused;
+once you've stayed on a page long enough to have really read it (20s by default),
+it extracts the readable text and hands it to the same index. Nothing to invoke —
+you read, it accumulates.
+
+```
+tab capture status          # on/off, the dwell bar, corpus size, what's excluded
+tab capture on | off
+tab capture recent          # what the index just learned
+tab capture exclude <term>  # never extract or store pages matching this
+tab capture include <term>  # drop an exclusion (e.g. `include mail.google.com`)
+tab search "<query>"        # …and now it has something to search
+```
+
+**What gets recorded is the whole question, so the policy lives in one place**
+(`capture.py`) and is enforced twice: the extension pulls it and applies it
+*before* it extracts any text — an excluded page's content is never read out of
+the DOM at all — and the server re-checks on ingest. Defaults are deliberately
+conservative: auth flows, banking, health, password managers, mail, and Handle's
+own local apps are excluded out of the box. Incognito is never indexed. Widen it
+yourself rather than discovering after the fact that something personal is in the
+index.
+
+Exclusion terms match the **host** unless they contain a slash, in which case they
+match host+path. That distinction is load-bearing: a bare `bank` matched against
+the whole URL would also silently drop an article slugged `/the-banking-crisis`.
+
+## Recording a workflow — the capability-recorder
+
+`tab record` captures what you do across Chrome and turns it into a reusable
+artifact. Two halves, deliberately split so Claude never sits in the capture
+loop:
+
+- **Capture (passive, no Claude).** `tab record start [label]` → do the task
+  normally → `tab record stop`. The extension attaches the debugger to the tab(s)
+  you use and streams every **navigation, tab switch, and API call** (XHR / Fetch
+  / Document — static assets and telemetry are dropped) to the server, which
+  appends them to `recordings/<id>/events.jsonl`. The sequence of write calls
+  (`POST` / `PUT` / `PATCH` / `DELETE`) *is* the workflow; each write also
+  captures its request **body** (the payload you submitted), with passwords /
+  tokens / secrets redacted in the extension before anything touches disk.
+- **Analysis (on-demand, in Claude Code).** `/record-workflow [id]` parses the
+  trace — segmenting at navigation/tab boundaries, normalising ids
+  (`/orders/8842` → `/orders/:id`) so it generalises — into a step list, writes a
+  plain SOP, and hands off to `/sop-to-skill` to make it runnable.
+
+Recording needs the extension (it's the recorder); Chrome shows a "Handle is
+debugging" banner while a session is live. Same passive-capture /
+on-demand-analysis split as sessions-mcp: the trace is a by-product of doing the
+task, not something Claude has to drive.
 
 ## Beyond your open tabs — Chrome's own data
 

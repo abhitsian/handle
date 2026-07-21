@@ -5,9 +5,17 @@ __pycache__/
 *.pyc
 .DS_Store
 workspaces.json
+stash.json
 shots/
 bundles/
+recordings/
+meetings/
 launch-video/node_modules/
 launch-video/renders/
 launch-video/snapshots/
 launch-video/.hyperframes/
+handle.server.log
+audit.jsonl
+webindex.db
+selectors.json
+capture.json

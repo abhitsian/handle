@@ -587,6 +587,65 @@ def read_tab_content(url: str, limit: int = 8000) -> str:
     return " ".join(raw.split())[:limit]
 
 
+def _html_to_text(raw: str) -> str:
+    """Strip an HTML source string to readable text — drop script/style, keep
+    block breaks. Stdlib HTMLParser, no deps. For reading local files off disk."""
+    from html.parser import HTMLParser
+    BLOCK = {"p", "div", "br", "li", "tr", "section", "article", "h1", "h2",
+             "h3", "h4", "h5", "h6", "ul", "ol", "table", "header", "footer"}
+    SKIP = {"script", "style", "noscript", "svg", "template"}
+
+    class _T(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.out, self.skip = [], 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in SKIP:
+                self.skip += 1
+            elif tag in BLOCK:
+                self.out.append("\n")
+
+        def handle_endtag(self, tag):
+            if tag in SKIP and self.skip:
+                self.skip -= 1
+
+        def handle_data(self, data):
+            if not self.skip and data.strip():
+                self.out.append(data)
+
+    t = _T()
+    try:
+        t.feed(raw)
+    except Exception:
+        pass
+    txt = re.sub(r"[ \t]+", " ", "".join(t.out))
+    return re.sub(r"\n{3,}", "\n\n", txt).strip()
+
+
+def read_local_file(url: str, limit: int = 200_000, md: bool = False) -> str:
+    """Read a file:// tab straight from disk — instant, no Chrome.
+
+    Chrome blocks AppleScript `execute javascript` on file:// pages (they just
+    time out), and the extension can only reach them with 'Allow access to file
+    URLs' turned on, so disk is the reliable path. HTML/HTM files are stripped to
+    readable text; everything else (md/txt/json/code) returns its raw contents.
+    """
+    from urllib.parse import urlparse, unquote
+    path = unquote(urlparse(url).path or "")
+    if not path or not os.path.isfile(path):
+        return ""
+    cap = limit if limit and limit > 0 else 20_000_000
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            raw = f.read(cap * 8 if cap < 2_000_000 else cap)
+    except Exception:
+        return ""
+    ext = os.path.splitext(path)[1].lower()
+    text = _html_to_text(raw) if ext in (".html", ".htm") else raw
+    return text[:limit] if limit and limit > 0 else text
+
+
 SHOTS_DIR = APP_DIR / "shots"
 
 

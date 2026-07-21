@@ -131,6 +131,7 @@ function toolReadTab(a) {
   if (a.md) args.push('--md');
   if (a.shot) args.push('--shot');
   if (a.full) args.push('--full');
+  if (a.scroll) args.push('--scroll');
   if (a.clipboard) args.push('--clipboard');
   if (a.cdp) args.push('--cdp');
   if (a.chars != null) args.push('--chars', String(a.chars));
@@ -193,6 +194,37 @@ function toolNoteTab(a) { if (!a.ref || !a.text) throw new Error('ref and text a
 function toolGroupTab(a) { if (!a.ref || !a.name) throw new Error('ref and name are required'); return [{ type: 'text', text: runTab(['group', String(a.ref), String(a.name)]) }]; }
 function toolPinTab(a) { if (!a.ref) throw new Error('ref is required'); return [{ type: 'text', text: runTab([a.pin === false ? 'unpin' : 'pin', String(a.ref)]) }]; }
 function toolRefreshTabs() { return [{ type: 'text', text: runTab(['refresh']) }]; }
+
+// ---- guarded acting ----
+function toolClickTab(a) {
+  if (!a.ref) throw new Error('ref is required');
+  const args = ['click', String(a.ref)];
+  if (a.selector) args.push(String(a.selector));
+  if (a.text) args.push('--text', String(a.text));
+  if (a.intent) args.push('--intent', String(a.intent));
+  if (a.confirm) args.push('--confirm');
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolTypeTab(a) {
+  if (!a.ref || a.text == null) throw new Error('ref and text are required');
+  const args = ['type', String(a.ref), a.selector == null ? '' : String(a.selector), String(a.text)];
+  if (a.submit) args.push('--submit');
+  if (a.confirm) args.push('--confirm');
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolSearchWeb(a) {
+  if (!a.query) throw new Error('query is required');
+  const args = ['search', String(a.query)];
+  if (a.limit != null) args.push('--limit', String(a.limit));
+  return [{ type: 'text', text: runTab(args) }];
+}
+function toolAudit(a) {
+  const args = ['audit'];
+  if (a.n != null) args.push('-n', String(a.n));
+  if (a.method) args.push('--method', String(a.method));
+  if (a.decision) args.push('--decision', String(a.decision));
+  return [{ type: 'text', text: runTab(args) }];
+}
 
 // ---- Chrome's own data (pointer, not page content) ----
 function toolHistory(a) {
@@ -331,7 +363,8 @@ const TOOLS = [
       full: { type: 'boolean', description: 'With a screenshot: scroll and capture the whole page.' },
       clipboard: { type: 'boolean', description: 'Read the macOS clipboard instead — the user copies (⌘A ⌘C), you grab it. The reliable floor when in-page reads fail.' },
       cdp: { type: 'boolean', description: 'Read via the opt-in DevTools Protocol (needs an existing --remote-debugging-port). The extension is the no-friction alternative.' },
-      chars: { type: 'number', description: 'Max characters of text per tab.' },
+      scroll: { type: 'boolean', description: 'Auto-scroll the page top→bottom first, then read — pulls lazy-loaded / virtualized content (infinite feeds, transcript viewers, chat logs) a single read would miss. Needs the extension; moves the tab.' },
+      chars: { type: 'number', description: 'Max characters of text per tab. Default 8000 cached / 200000 for live. Pass 0 for the WHOLE page (long transcripts/docs) — truncation is otherwise flagged in the output, never silent.' },
     }, required: ['ref'] },
   },
   {
@@ -484,6 +517,61 @@ const TOOLS = [
       'scans/screenshots prefer the extension automatically when connected and fall back to AppleScript otherwise.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'click_tab',
+    description:
+      'Click an element in one of the user\'s open tabs, CSP-safe (works on Okta/banks where eval is blocked). ' +
+      'Give a CSS selector, text:"visible label", OR intent:"what it means" — intent SELF-HEALS: it caches the ' +
+      'selector that worked and re-finds the element by intent when the DOM drifts, and returns ranked candidates ' +
+      'if ambiguous. IRREVERSIBILITY GUARD: clicks that look irreversible (Submit/Send/Pay/Delete/Approve…) are ' +
+      'BLOCKED and return a ⛔ message unless you pass confirm:true — so confirm intent with the user first. Every ' +
+      'action is recorded to the audit trail.',
+    inputSchema: { type: 'object', properties: {
+      ref: { description: REF_DESC, anyOf: [{ type: 'string' }, { type: 'number' }] },
+      selector: { type: 'string', description: 'CSS selector to click.' },
+      text: { type: 'string', description: 'Click the element whose visible text contains this.' },
+      intent: { type: 'string', description: 'Self-healing: find by intent (text/role/aria), cache what worked, re-find on DOM drift.' },
+      confirm: { type: 'boolean', description: 'Required to execute an irreversible-looking click (Submit/Send/Pay/Delete). Get user sign-off first.' },
+    }, required: ['ref'] },
+  },
+  {
+    name: 'type_tab',
+    description:
+      'Type text into a field in an open tab (CSP-safe, pierces shadow DOM; selector "" auto-finds a message/' +
+      'composer). submit:true presses Enter to SEND — which is irreversible, so it is BLOCKED unless confirm:true. ' +
+      'Recorded to the audit trail; secret-looking fields are redacted in the log.',
+    inputSchema: { type: 'object', properties: {
+      ref: { description: REF_DESC, anyOf: [{ type: 'string' }, { type: 'number' }] },
+      selector: { type: 'string', description: 'CSS selector of the input/textarea, or "" to heuristically find a composer.' },
+      text: { type: 'string', description: 'Text to type.' },
+      submit: { type: 'boolean', description: 'Press Enter after typing to send (irreversible — needs confirm:true).' },
+      confirm: { type: 'boolean', description: 'Required when submit:true or the field looks like a send/pay action.' },
+    }, required: ['ref', 'text'] },
+  },
+  {
+    name: 'search_web',
+    description:
+      'Full-text search across every page the user has READ through Handle — their logged-in web, made queryable ' +
+      '(SharePoint/Confluence/Notion/Jira/articles behind auth that no enterprise search can index). Local BM25, ' +
+      'private. Pages are indexed automatically as they are read. Returns ranked passages with source URLs — read ' +
+      'a hit with read_tab (or open_tab) for the full page.',
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', description: 'Words/phrase to search for.' },
+      limit: { type: 'number', description: 'Max hits (default 8).' },
+    }, required: ['query'] },
+  },
+  {
+    name: 'audit',
+    description:
+      'The append-only trail of what Handle DID in the user\'s session (click/type/eval/scroll) — attribution for ' +
+      'actions taken with their credentials, including blocked/confirmed guard decisions. Use to answer "what did ' +
+      'Handle do", or to review before/after an automation.',
+    inputSchema: { type: 'object', properties: {
+      n: { type: 'number', description: 'How many recent actions (default 25).' },
+      method: { type: 'string', description: 'Filter to one method (click/type/eval/scroll/watch).' },
+      decision: { type: 'string', description: 'Filter by decision (executed/confirmed/blocked/miss/error).' },
+    } },
+  },
 ];
 
 const HANDLERS = {
@@ -495,6 +583,7 @@ const HANDLERS = {
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,
   history: toolHistory, closed: toolClosed, bookmarks: toolBookmarks, downloads: toolDownloads,
   journeys: toolJourneys, most_visited: toolTop, console: toolConsole, ext_status: toolExtStatus,
+  click_tab: toolClickTab, type_tab: toolTypeTab, search_web: toolSearchWeb, audit: toolAudit,
 };
 
 // ---------- JSON-RPC / MCP stdio loop ----------
