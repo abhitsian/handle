@@ -889,9 +889,10 @@ STASH_STYLE = """
      padding:13px 15px; margin:9px 0; display:flex; gap:12px; align-items:flex-start; }
   .link .emoji { font-size:19px; line-height:1.2; }
   .link .body { flex:1; min-width:0; }
-  .link a.tt { font-weight:600; color:var(--ink); text-decoration:none; font-size:15px; }
+  .link a.tt { display:block; font-weight:600; color:var(--ink); text-decoration:none;
+     font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .link a.tt:hover { color:var(--accent); text-decoration:underline; }
-  .link .url { color:var(--mut); font-size:12px; margin-top:3px; overflow:hidden;
+  .link .url, .sug .url { color:var(--mut); font-size:12px; margin-top:3px; overflow:hidden;
      text-overflow:ellipsis; white-space:nowrap; }
   .link .meta { margin-top:6px; font-size:12px; color:var(--mut); display:flex;
      gap:8px; flex-wrap:wrap; align-items:center; }
@@ -906,7 +907,14 @@ STASH_STYLE = """
   .iconbtn.star.on { color:var(--amber); }
   .sug { background:#f3eee2; border:1px solid #e6dcc4; border-radius:11px;
      padding:11px 14px; margin:9px 0; display:flex; gap:12px; align-items:flex-start; }
+  .sug.hidden { display:none; }
   .sug .body { flex:1; min-width:0; }
+  .sug .tt { display:block; font-weight:600; font-size:14px; color:var(--ink);
+     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .showmore { display:block; width:100%; border:1px dashed #e6dcc4; background:none;
+     color:var(--mut); padding:9px 12px; border-radius:9px; font:600 12px/1 inherit;
+     cursor:pointer; margin:6px 0 0; }
+  .showmore:hover { color:var(--accent); border-color:var(--accent); }
   .sug .keep { border:1px solid var(--accent); background:var(--accent); color:#fff;
      padding:6px 12px; border-radius:7px; font:600 12px/1 inherit; cursor:pointer; }
   .sug .dismiss { border:1px solid var(--line); background:var(--card); color:var(--mut);
@@ -950,14 +958,15 @@ def _stash_link_html(r: dict) -> str:
     )
 
 
-def _stash_sug_html(c: dict) -> str:
+def _stash_sug_html(c: dict, hidden: bool = False) -> str:
     emoji = _SRC_EMOJI.get(c.get("source", "Web"), "\U0001F517")
     return (
-        f'<div class="sug" data-url="{esc(c["url"])}">'
+        f'<div class="sug{" hidden" if hidden else ""}" data-url="{esc(c["url"])}">'
         f'<div class="emoji">{emoji}</div>'
-        f'<div class="body"><b>{esc(c.get("title") or c["url"])}</b> '
-        f'<span class="muted">&middot; {esc(c.get("source", "Web"))} &middot; '
-        f'pasted {c.get("count", 1)}&times;</span>'
+        f'<div class="body">'
+        f'<span class="tt">{esc(c.get("title") or c["url"])}</span>'
+        f'<div class="muted">{esc(c.get("source", "Web"))} &middot; '
+        f'pasted {c.get("count", 1)}&times;</div>'
         f'<div class="url">{esc(c["url"])}</div></div>'
         f'<div class="acts">'
         f'<button class="keep" data-url="{esc(c["url"])}" '
@@ -997,8 +1006,12 @@ def render_stash() -> str:
         out.append(f'<div class="subhead">Suggested from Chrome history &amp; your '
                    f'sessions &middot; {len(fresh)} doc link'
                    f'{"" if len(fresh) == 1 else "s"} you opened but never kept</div>')
-        for c in fresh:
-            out.append(_stash_sug_html(c))
+        SUG_VISIBLE = 8
+        for i, c in enumerate(fresh):
+            out.append(_stash_sug_html(c, hidden=(i >= SUG_VISIBLE)))
+        if len(fresh) > SUG_VISIBLE:
+            out.append(f'<button class="showmore" id="sugmore">Show all '
+                       f'{len(fresh)} suggestions</button>')
     # search + source filter chips
     out.append('<div class="sbar"><input class="q" id="q" '
                'placeholder="Search your stash…" /></div>')
@@ -1066,6 +1079,13 @@ document.querySelectorAll('a.tt').forEach(function(a){
     fetch('/api/stash/touch', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ url: a.dataset.url }) }); });
 });
+// suggestions: show all
+var sm = document.getElementById('sugmore');
+if (sm) sm.addEventListener('click', function(){
+  document.querySelectorAll('.sug.hidden').forEach(function(el){
+    el.classList.remove('hidden'); });
+  sm.style.display = 'none';
+});
 // suggestions: keep / dismiss
 document.querySelectorAll('.sug .keep').forEach(function(b){
   b.addEventListener('click', function(){
@@ -1113,14 +1133,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # browser closed the tab or reloaded mid-response
 
     def _redirect(self, location: str):
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
-        self.end_headers()
+        try:
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # browser went away before the redirect was sent
 
     def _json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0) or 0)

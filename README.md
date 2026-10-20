@@ -235,6 +235,43 @@ debugging" banner while a session is live. Same passive-capture /
 on-demand-analysis split as sessions-mcp: the trace is a by-product of doing the
 task, not something Claude has to drive.
 
+## Modes — named windows that survive closing
+
+Name a Chrome window (Window → Name Window…), then `tab mode save <name>` to
+snapshot its tabs into `modes.json`. Close the window and reopen it by name later.
+Nothing saves in the background: a mode holds what you last saved.
+
+`tab windows` shows tabs grouped by window with window names, and
+`tab move t3 t8 --to Read` moves tabs through the extension (`chrome.tabs.move`),
+so pages stay loaded. The `/move-tabs` skill sorts all tabs into modes.
+
+| Command | What it does |
+|---|---|
+| `tab mode` | saved modes, tab counts, open/closed, last snapshot |
+| `tab mode open <name>` | focus the window if open, else rebuild it with the same name and tabs (prefix match: `open inter`) |
+| `tab mode save <name>` | snapshot one named window now; `--front` names the front window first |
+| `tab mode sync` | snapshot every named window now |
+| `tab mode undo <name>` | restore the previous snapshot (five kept per mode) |
+| `tab mode rm <name>` | delete a saved mode |
+
+An empty window never overwrites a saved mode. Incognito windows are skipped.
+
+## Recording what Handle does — with Pointer
+
+If [Pointer](https://github.com/abhitsian/pointer) is installed, Handle can record a tab's window while it acts:
+the screen at one frame a second plus mic and Mac audio, written up when it stops, with an amber frame on screen
+while it records.
+
+| Command | What it does |
+|---|---|
+| `tab rec start t7` | focus the tab, then record its Chrome window |
+| `tab rec start` | record whichever screen the mouse is on, following it across screens |
+| `tab rec stop` | stop; prints the session folder (its `index.html` is the page) |
+| `tab rec status` / `peek` / `cancel` | pass through to Pointer (`peek` = a screenshot now + what was said recently) |
+| `tab watch t7 --check "…" --record` | record for as long as the watch runs |
+
+Start and stop go to the audit trail. The MCP tool is `record_tab`.
+
 ## Beyond your open tabs — Chrome's own data
 
 Handle also reads Chrome's other local stores, so the agent can reach what

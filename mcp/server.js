@@ -13,7 +13,7 @@
  *
  * Tools: list_tabs, find_tab, grep_tabs, read_tab, crawl, screenshot_tab,
  *        active_tab, open_tab, close_tab, note_tab, group_tab, pin_tab,
- *        refresh_tabs, click_tab, type_tab, search_web, audit, meeting
+ *        refresh_tabs, click_tab, type_tab, search_web, audit, record_tab, meeting
  * Requires: macOS + Google Chrome, Python 3 on PATH. For read/screenshot,
  *   Chrome → View → Developer → "Allow JavaScript from Apple Events", and
  *   Screen Recording permission for screenshots.
@@ -172,6 +172,10 @@ function toolScreenshotTab(a) {
   if (!a.ref) throw new Error('ref is required');
   const args = ['shot', String(a.ref), '--json'];
   if (a.full) args.push('--full');
+  // Capture waits for the rendered content to stop changing. On frame-based pages the
+  // outer document reports `complete` while the iframe is still swapping in new content,
+  // so an immediate capture returns the PREVIOUS page's screen. (Papercut 2026-08-18)
+  if (a.settle != null) args.push('--settle', String(a.settle));
   const r = runTab(args, { json: true });
   const shots = (r && r.shots) || [];
   if (!shots.length) return [{ type: 'text', text: `Could not screenshot: ${(r && r.error) || 'unknown error'}` }];
@@ -202,6 +206,8 @@ function toolClickTab(a) {
   if (a.selector) args.push(String(a.selector));
   if (a.text) args.push('--text', String(a.text));
   if (a.intent) args.push('--intent', String(a.intent));
+  if (a.nth != null) args.push('--nth', String(a.nth));
+  if (a.near) args.push('--near', String(a.near));
   if (a.confirm) args.push('--confirm');
   return [{ type: 'text', text: runTab(args) }];
 }
@@ -232,6 +238,13 @@ function toolAudit(a) {
   if (a.n != null) args.push('-n', String(a.n));
   if (a.method) args.push('--method', String(a.method));
   if (a.decision) args.push('--decision', String(a.decision));
+  return [{ type: 'text', text: runTab(args) }];
+}
+
+function toolRecordTab(a) {
+  const args = ['rec', String(a.action)];
+  if (a.action === 'start' && a.ref != null) args.push(String(a.ref));
+  if (a.listen) args.push('--listen');
   return [{ type: 'text', text: runTab(args) }];
 }
 
@@ -411,6 +424,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {
       ref: { type: 'string', description: REF_DESC },
       full: { type: 'boolean', description: 'Scroll and capture the whole page across several images.' },
+      settle: { type: 'number', description: 'Milliseconds to wait for rendered content to stop changing before capturing (default 2500; 0 disables). Raise it after clicking within a frame-based page, where the outer document reports ready while the frame is still re-rendering.' },
     }, required: ['ref'] },
   },
   {
@@ -532,7 +546,7 @@ const TOOLS = [
       'Click an element in one of the user\'s open tabs, CSP-safe (works on Okta/banks where eval is blocked). ' +
       'Give a CSS selector, text:"visible label", OR intent:"what it means" — intent SELF-HEALS: it caches the ' +
       'selector that worked and re-finds the element by intent when the DOM drifts, and returns ranked candidates ' +
-      'if ambiguous. IRREVERSIBILITY GUARD: clicks that look irreversible (Submit/Send/Pay/Delete/Approve…) are ' +
+      'if ambiguous. Repeated elements (same button on every card/row): add nth or near to pick one. IRREVERSIBILITY GUARD: clicks that look irreversible (Submit/Send/Pay/Delete/Approve…) are ' +
       'BLOCKED and return a ⛔ message unless you pass confirm:true — so confirm intent with the user first. Every ' +
       'action is recorded to the audit trail.',
     inputSchema: { type: 'object', properties: {
@@ -540,6 +554,8 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector to click.' },
       text: { type: 'string', description: 'Click the element whose visible text contains this.' },
       intent: { type: 'string', description: 'Self-healing: find by intent (text/role/aria), cache what worked, re-find on DOM drift.' },
+      nth: { type: 'number', description: 'When the selector/text matches several elements (a button repeated on every card or row), click the Nth match, 1-based in document order.' },
+      near: { type: 'string', description: 'When several elements match, click the one inside the smallest block whose text contains this, e.g. text:"Download JSON", near:"A.Y. 2025-26".' },
       confirm: { type: 'boolean', description: 'Required to execute an irreversible-looking click (Submit/Send/Pay/Delete). Get user sign-off first.' },
     }, required: ['ref'] },
   },
@@ -582,6 +598,20 @@ const TOOLS = [
     } },
   },
   {
+    name: 'record_tab',
+    description:
+      'Record what happens in a tab\'s Chrome window with Pointer (screen at 1 fps + audio, written up after stop, ' +
+      'amber frame on screen while recording). start focuses the tab first; omit ref to follow the mouse across ' +
+      'screens. Use when the user asks to record/track what Handle does, or before a multi-step or confirmed ' +
+      'irreversible action sequence they will want to review. stop returns the session folder (index.html is the ' +
+      'page; the pointer MCP reads it). status/peek/cancel pass through.',
+    inputSchema: { type: 'object', properties: {
+      action: { type: 'string', enum: ['start', 'stop', 'status', 'peek', 'cancel'] },
+      ref: { description: REF_DESC, anyOf: [{ type: 'string' }, { type: 'number' }] },
+      listen: { type: 'boolean', description: 'Pointer listen mode (suggests questions as it hears speech).' },
+    }, required: ['action'] },
+  },
+  {
     name: 'meeting',
     description:
       'Turn a Zoom cloud recording into a transcript on disk. A Zoom recording already ships a full speaker-' +
@@ -609,7 +639,7 @@ const HANDLERS = {
   group_tab: toolGroupTab, pin_tab: toolPinTab, refresh_tabs: toolRefreshTabs,
   history: toolHistory, closed: toolClosed, bookmarks: toolBookmarks, downloads: toolDownloads,
   journeys: toolJourneys, most_visited: toolTop, console: toolConsole, ext_status: toolExtStatus,
-  click_tab: toolClickTab, type_tab: toolTypeTab, search_web: toolSearchWeb, audit: toolAudit,
+  click_tab: toolClickTab, type_tab: toolTypeTab, search_web: toolSearchWeb, audit: toolAudit, record_tab: toolRecordTab,
   meeting: toolMeeting,
 };
 

@@ -19,3 +19,5 @@ audit.jsonl
 webindex.db
 selectors.json
 capture.json
+modes.json
+modes-sync.log

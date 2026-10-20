@@ -12,7 +12,7 @@
 // talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.7.0";
+const VERSION = "1.9.0";
 
 // Never let a debugger op hang forever (e.g. attach stalls because DevTools or
 // another CDP client already holds the tab). Reject fast so the caller gets a
@@ -115,52 +115,84 @@ async function evalIn(tabId, expression) {
 // they work even on pages whose CSP blocks string-eval (Okta, banks, etc.).
 // Both pierce shadow DOM (modern apps like Teams put inputs in shadow roots that
 // document.querySelector can't see) via a deep element walk.
-async function clickIn(tabId, sel, text) {
+// nth (1-based, document order) and near ("A.Y. 2025-26") pick one element when
+// several match — e.g. a "Download JSON" button repeated on every card. `near`
+// keeps the matches whose closest ancestor containing that text is smallest, so
+// the button inside the card that says "A.Y. 2025-26" wins over the other cards'.
+async function clickIn(tabId, sel, text, nth, near) {
   await wakeTab(tabId);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (sel, text) => {
+    func: (sel, text, nth, near) => {
       const deep = (root, acc) => {
         let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
         for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
         return acc;
       };
       const all = deep(document, []);
-      let el;
+      let matches;
       if (text) {
         const q = (text + "").toLowerCase();
         const ROLES = ["button", "option", "menuitem", "menuitemradio", "menuitemcheckbox", "link", "tab", "treeitem", "listitem"];
         const clickable = all.filter((e) => /^(BUTTON|A)$/.test(e.tagName) || (e.getAttribute && (ROLES.includes(e.getAttribute("role")) || e.hasAttribute("onclick") || e.hasAttribute("tabindex"))) || /^(submit|button)$/.test(e.type || ""));
         const hit = (e) => ((e.innerText || e.value || e.getAttribute("aria-label") || "") + "").trim().toLowerCase().indexOf(q) >= 0;
-        // prefer the smallest (most specific) matching node, not a huge container
-        el = clickable.filter(hit).sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0];
+        matches = clickable.filter(hit);
+        // drop a match that merely wraps another match (keep the most specific node)
+        matches = matches.filter((m) => !matches.some((o) => o !== m && m.contains(o)));
+        // without nth/near, prefer the smallest (most specific) node, as before
+        if (!nth && !near) matches.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
       } else {
-        el = document.querySelector(sel) || all.find((e) => { try { return e.matches(sel); } catch (x) { return false; } });
+        matches = all.filter((e) => { try { return e.matches(sel); } catch (x) { return false; } });
       }
-      if (!el) return "NOT_FOUND";
+      if (near && matches.length > 1) {
+        const n = (near + "").toLowerCase();
+        const scope = (m) => {
+          for (let e = m; e; e = e.parentElement) {
+            const t = (e.innerText || "").toLowerCase();
+            if (t.indexOf(n) >= 0) return t.length;
+          }
+          return Infinity;
+        };
+        const scored = matches.map((m) => [m, scope(m)]);
+        const best = Math.min(...scored.map((x) => x[1]));
+        matches = best === Infinity ? [] : scored.filter((x) => x[1] === best).map((x) => x[0]);
+      }
+      const total = matches.length;
+      const el = nth ? matches[nth - 1] : matches[0];
+      if (!el) return total && nth ? { miss: "only " + total + " match(es); nth=" + nth + " is out of range" } : "NOT_FOUND";
+      // a selector that matches exactly this element: grow the path until unique
       const cssPath = (node) => {
         if (!node || node.nodeType !== 1) return "";
         const parts = []; let e = node;
-        while (e && e.nodeType === 1 && parts.length < 6) {
-          if (e.id) { parts.unshift("#" + CSS.escape(e.id)); break; }
-          let s = e.tagName.toLowerCase();
-          const p = e.parentElement;
-          if (p) {
-            const sib = Array.prototype.filter.call(p.children, (c) => c.tagName === e.tagName);
-            if (sib.length > 1) s += ":nth-of-type(" + (sib.indexOf(e) + 1) + ")";
+        while (e && e.nodeType === 1 && parts.length < 25) {
+          if (e.id) { parts.unshift("#" + CSS.escape(e.id)); }
+          else {
+            let s = e.tagName.toLowerCase();
+            const p = e.parentElement;
+            if (p) {
+              const sib = Array.prototype.filter.call(p.children, (c) => c.tagName === e.tagName);
+              if (sib.length > 1) s += ":nth-of-type(" + (sib.indexOf(e) + 1) + ")";
+            }
+            parts.unshift(s);
           }
-          parts.unshift(s); e = p;
+          const path = parts.join(" > ");
+          try { if (document.querySelectorAll(path).length === 1) return path; } catch (x) {}
+          if (e.id) break;
+          e = e.parentElement;
         }
         return parts.join(" > ");
       };
       el.scrollIntoView({ block: "center" });
       el.click();
-      return { r: "clicked: " + ((el.innerText || el.value || el.getAttribute("aria-label") || el.tagName) + "").trim().slice(0, 60), sel: cssPath(el) };
+      const label = ((el.innerText || el.value || el.getAttribute("aria-label") || el.tagName) + "").trim().slice(0, 60);
+      const of = total > 1 ? "  (" + (matches.indexOf(el) + 1) + " of " + total + " matches — pass nth/near to pick another)" : "";
+      return { r: "clicked: " + label + of, sel: cssPath(el) };
     },
-    args: [sel || null, text || null],
+    args: [sel || null, text || null, nth || null, near || null],
   });
   const out = res.result;
   if (out === "NOT_FOUND" || !out) return { value: "NOT_FOUND" };
+  if (out.miss) return { error: out.miss };
   return { value: out.r, selector: out.sel };
 }
 
@@ -181,15 +213,21 @@ async function resolveEls(tabId, intent) {
       const cssPath = (node) => {
         if (!node || node.nodeType !== 1) return "";
         const parts = []; let e = node;
-        while (e && e.nodeType === 1 && parts.length < 6) {
-          if (e.id) { parts.unshift("#" + CSS.escape(e.id)); break; }
-          let s = e.tagName.toLowerCase();
-          const p = e.parentElement;
-          if (p) {
-            const sib = Array.prototype.filter.call(p.children, (c) => c.tagName === e.tagName);
-            if (sib.length > 1) s += ":nth-of-type(" + (sib.indexOf(e) + 1) + ")";
+        while (e && e.nodeType === 1 && parts.length < 25) {
+          if (e.id) { parts.unshift("#" + CSS.escape(e.id)); }
+          else {
+            let s = e.tagName.toLowerCase();
+            const p = e.parentElement;
+            if (p) {
+              const sib = Array.prototype.filter.call(p.children, (c) => c.tagName === e.tagName);
+              if (sib.length > 1) s += ":nth-of-type(" + (sib.indexOf(e) + 1) + ")";
+            }
+            parts.unshift(s);
           }
-          parts.unshift(s); e = p;
+          const path = parts.join(" > ");
+          try { if (document.querySelectorAll(path).length === 1) return path; } catch (x) {}
+          if (e.id) break;
+          e = e.parentElement;
         }
         return parts.join(" > ");
       };
@@ -307,9 +345,18 @@ async function harvestIn(tabId, sel, fields, limit) {
           if (!keys.length) return { text: (el.innerText || "").trim() };
           const o = {};
           for (const k of keys) {
-            const sub = fields[k];
+            // "sel", "sel@href", "@datetime": an attribute after @, the element itself when the selector is empty.
+            const spec = fields[k] || "";
+            const at = spec.lastIndexOf("@");
+            const sub = at > -1 ? spec.slice(0, at) : spec;
+            const attr = at > -1 ? spec.slice(at + 1) : "";
             const n = !sub || sub === "." ? el : el.querySelector(sub);
-            o[k] = n ? (n.innerText || n.value || "").trim() : "";
+            if (!n) { o[k] = ""; continue; }
+            if (!attr || attr === "text") o[k] = (n.innerText || n.value || "").trim();
+            else if (attr === "html") o[k] = n.innerHTML;
+            // href and src read off the property, which resolves relative links to absolute ones.
+            else if ((attr === "href" || attr === "src") && n[attr]) o[k] = String(n[attr]);
+            else o[k] = String(n.getAttribute(attr) ?? n[attr] ?? "").trim();
           }
           return o;
         });
@@ -545,13 +592,28 @@ async function recRestore() {
   } catch (e) {}
 }
 
+// Move tabs to another window, keeping page state (chrome.tabs.move, not a
+// reload). With no window_id, the tabs go into a new window. Returns its id.
+async function moveTabs(tabIds, windowId) {
+  if (!tabIds || !tabIds.length) return { error: "no tabs" };
+  let target = windowId;
+  let rest = tabIds;
+  if (!target) {
+    const w = await chrome.windows.create({ tabId: tabIds[0], focused: false });
+    target = w.id;
+    rest = tabIds.slice(1);
+  }
+  if (rest.length) await chrome.tabs.move(rest, { windowId: target, index: -1 });
+  return { window_id: target, moved: tabIds.length };
+}
+
 async function dispatch(cmd) {
   const { method, params = {} } = cmd;
   const tabId = params.tab_id;
   switch (method) {
     case "read": return await withTimeout(readTab(tabId), 12000, "read");
     case "eval": return await evalIn(tabId, params.expression || "");
-    case "click": return await clickIn(tabId, params.sel, params.text);
+    case "click": return await clickIn(tabId, params.sel, params.text, params.nth, params.near);
     case "type": return await typeIn(tabId, params.sel, params.text, params.submit);
     case "resolve": return await resolveEls(tabId, params.intent || "");
     case "scroll": return await scrollIn(tabId, params.dy || 2000);
@@ -560,6 +622,8 @@ async function dispatch(cmd) {
     case "console": return await withTimeout(consoleLogs(tabId, params.ms || 1800), (params.ms || 1800) + 6000, "console");
     case "record_start": return await startRecording();
     case "record_stop": return await stopRecording();
+    case "move": return await moveTabs(params.tab_ids, params.window_id);
+    case "reload_ext": setTimeout(() => chrome.runtime.reload(), 200); return { reloading: true };
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };
   }

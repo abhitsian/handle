@@ -36,6 +36,10 @@ greppable; pass --json to any command for machine-readable output.
     tab stash add active     # keep the tab you're looking at
     tab stash find browse    # search your kept links
     tab stash scan 7d        # surface doc links you pasted in sessions but never kept
+    tab mode                 # saved modes (named Chrome windows) — Work, Read, …
+    tab mode open work       # reopen the Work window with its tabs, or focus it
+    tab windows              # tabs grouped by window, with window names
+    tab move t7 t9 --to Read # move tabs to the Read window (keeps pages loaded)
 
 Reference forms accepted everywhere a tab is expected:
     t7    (handle)   ·   7   (bare number)   ·   active   ·   a fuzzy substring
@@ -47,6 +51,7 @@ import io
 import json
 import re
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +60,7 @@ import collect
 import chrome_data as cd
 import cdp
 import stash as stash_lib
+import modes as modes_lib
 import guard
 import audit
 import webindex
@@ -134,9 +140,49 @@ def _cdp_shot(tab: dict, args) -> list[str] | None:
     return [str(path)]
 
 
+# Fingerprint of what is actually rendered, top document plus every same-origin frame.
+# Frame-based admin UIs swap the iframe body via XHR while the outer document stays
+# `complete`, so readyState alone says "done" when the pixels are still the old page.
+_SETTLE_JS = """(() => {
+  const p = [document.readyState, document.body ? document.body.innerText.length : 0];
+  for (const f of document.querySelectorAll('iframe, frame')) {
+    try {
+      const d = f.contentDocument;
+      p.push(d ? d.readyState + ':' + (d.body ? d.body.innerText.length : 0) : 'none');
+    } catch (e) { p.push('cross-origin'); }
+  }
+  return p.join('|');
+})()"""
+
+
+def _settle_tab(tab: dict, max_ms: int = 2500, poll_ms: int = 250) -> None:
+    """Block until the rendered content stops changing, or max_ms elapses.
+
+    Papercut (2026-08-18, handle): after `click_tab` navigated a GPON router's left
+    menu, the breadcrumb read "Network>Wireless (2.4GHz)" while the iframe still showed
+    the 5GHz form — capture beat the frame's XHR re-render. The screenshot was reported
+    as fact and only caught because 80MHz/channel 60 are impossible on 2.4GHz. A silent
+    wrong answer is the worst failure mode here, so capture waits for two identical
+    content fingerprints before it fires. Best-effort: any error just returns.
+    """
+    if max_ms <= 0 or tab.get("ext_tab_id") is None or not _ext_alive():
+        return
+    deadline = time.time() + max_ms / 1000.0
+    last = None
+    while time.time() < deadline:
+        ok, val = _run_js(tab, _SETTLE_JS, timeout=3)
+        if not ok:
+            return  # cross-origin, CSP, or no extension — capture as-is rather than stall
+        if val == last and str(val).startswith("complete"):
+            return
+        last = val
+        time.sleep(poll_ms / 1000.0)
+
+
 def _capture_shots(tab: dict, args):
     """Screenshot a tab, best backend first → (shots, source, err).
     CDP (if --cdp) → extension (if connected, race-free) → AppleScript floor."""
+    _settle_tab(tab, getattr(args, "settle", 2500))
     if getattr(args, "cdp", False):
         shots = _cdp_shot(tab, args)
         if shots:
@@ -170,7 +216,14 @@ def load_tabs(refresh: bool = False) -> list[dict]:
     `stale` flag, so a single record has everything a caller needs.
     """
     if refresh:
-        collect.collect()
+        # The extension keeps state.json fresh via /ext/sync, so when it is connected a
+        # refresh is already done and AppleScript is pure cost. `cmd_refresh` has always
+        # checked this; load_tabs did not, and called collect() unconditionally.
+        # Papercut (2026-08-19, handle): that AppleScript scan runs to a 180s timeout,
+        # well past the MCP wrapper's 60s budget, so any refresh path through load_tabs
+        # died as an opaque `spawnSync python3 ETIMEDOUT` instead of returning tabs.
+        if not _ext_alive():
+            collect.collect()
     state = collect.load_json(STATE_PATH, {})
     _backfill_ids(state)
     ded = collect.load_json(DEDUCTIONS_PATH, {"tabs": {}})
@@ -235,6 +288,36 @@ def _id_num(handle: str) -> int:
 # --------------------------------------------------------------------------- #
 # reference resolution: tN | N | active | fuzzy substring
 # --------------------------------------------------------------------------- #
+class StaleHandle(Exception):
+    """An explicit handle (t12 / 12) is not in the current index.
+
+    Raised instead of silently degrading to a fuzzy title/URL search, which is how a
+    dead handle used to end up pointing at a completely unrelated tab.
+    """
+
+    def __init__(self, handle: str):
+        self.handle = handle
+        super().__init__(handle)
+
+    def message(self) -> str:
+        return (f"Handle {self.handle} is not in the current tab index — it expired or "
+                f"Chrome restarted since the last scan.\n"
+                f"  Handle refs are never fuzzy-matched, so this is a hard miss rather "
+                f"than a guess at another tab.\n"
+                f"  Try: `tab refresh` then `tab list`, or `tab find <term>` to locate it "
+                f"by title/URL.")
+
+
+def _is_handle_shaped(ref: str) -> bool:
+    """True for `t12` or a bare `12` — refs that name a handle rather than describe one."""
+    r = ref.strip()
+    if not r:
+        return False
+    if r.isdigit():
+        return True
+    return r[0] in "tT" and r[1:].isdigit() and len(r) > 1
+
+
 def resolve(ref: str, tabs: list[dict]) -> list[dict]:
     """Resolve one reference string to matching tab record(s).
 
@@ -258,6 +341,15 @@ def resolve(ref: str, tabs: list[dict]) -> list[dict]:
     if ref in by_id:  # someone passed an exact handle like "t7"
         return [by_id[ref]]
 
+    # A handle-shaped ref that missed must NOT fall through to fuzzy matching.
+    # Papercut (2026-08-19 / 2026-08-07, handle): after a Chrome restart the index
+    # churned and `open t68` fuzzy-matched "t68" inside an unrelated tab's URL, so
+    # Handle focused a ServiceNow tab instead of the requested one — and `read` on a
+    # stale handle returned a screenshot of an unrelated window instead of erroring.
+    # A miss on an explicit handle is a stale index, not a search term. Fail loudly.
+    if _is_handle_shaped(ref):
+        raise StaleHandle(handle)
+
     term = ref.lower()
     hits = [t for t in tabs
             if term in t["title"].lower()
@@ -269,7 +361,16 @@ def resolve(ref: str, tabs: list[dict]) -> list[dict]:
 
 def resolve_one(ref: str, tabs: list[dict]) -> dict | None:
     """Resolve to exactly one tab; on ambiguity print the candidates and exit."""
-    hits = resolve(ref, tabs)
+    # A stale handle gets ONE automatic re-scan (Chrome restart churns the index), then
+    # fails loudly rather than falling back to a guess. Papercut 2026-08-19 / 2026-08-07.
+    try:
+        hits = resolve(ref, tabs)
+    except StaleHandle:
+        try:
+            hits = resolve(ref, load_tabs(refresh=True))
+        except StaleHandle as exc:
+            print(exc.message())
+            sys.exit(1)
     # `active` can point at a tab opened since the last collect — re-scan once
     # so "read active" / "open active" work first-try on a fresh frontmost tab.
     if not hits and ref.strip().lower() == "active":
@@ -533,11 +634,42 @@ def _merge_scroll_reads(batches: list[str]) -> str:
     return (("\n".join(recovered) + "\n\n" + base).strip()) if recovered else base
 
 
-def _scroll_read_harvest(tid: int, steps: int = 40, by: int = 2000, wait: float = 0.6) -> str:
+# A visible, enabled control that would reveal more rows if clicked. Scrolling does not
+# press it, so the harvest below stops at whatever is already in the DOM.
+_LOADMORE_JS = """(() => {
+  const RE = /^(load|show|view)\\s+(more|all)\\b|^more\\b|^next\\b|load more|show more|view more/i;
+  const seen = [];
+  const els = document.querySelectorAll(
+    'button, a, [role="button"], input[type="button"], input[type="submit"], [class*="load-more" i], [class*="loadmore" i]');
+  for (const el of els) {
+    const t = ((el.innerText || el.value || '') + '').trim();
+    if (!t || t.length > 40 || !RE.test(t)) continue;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+    if (!seen.includes(t)) seen.push(t);
+    if (seen.length >= 3) break;
+  }
+  return seen.join(' | ');
+})()"""
+
+
+def _scroll_read_harvest(tid: int, steps: int = 40, by: int = 2000,
+                         wait: float = 0.6) -> tuple[str, str]:
     """Scroll a tab top→bottom via the extension, reading after each step, and
     merge. Triggers lazy-loading and captures virtualized content that would be
     missed by a single read. Stops early once the bottom is reached or the page
-    stops growing."""
+    stops growing.
+
+    Returns (text, pagination_hint). The hint names a still-unclicked Load-more
+    control. Papercut (2026-08-08, handle): scraping a 172-question list returned 49
+    twice with no truncation flag, because the page paginates behind a `Load more`
+    button rather than infinite scroll — scrolling reaches the bottom, height stops
+    growing, and the harvest calls that done. Only the site's own "172 Questions"
+    header revealed the gap. A partial answer that looks complete is the failure
+    mode worth shouting about."""
     import time as _t
     _ext_cmd("scroll", {"tab_id": tid, "dy": -10_000_000})  # start from the top
     _t.sleep(wait)
@@ -561,7 +693,15 @@ def _scroll_read_harvest(tid: int, steps: int = 40, by: int = 2000, wait: float 
                 break
         else:
             stagnant, last_h = 0, h
-    return _merge_scroll_reads(batches)
+    hint = ""
+    try:
+        r = _ext_cmd("eval", {"tab_id": tid, "expression": _LOADMORE_JS}, timeout=8)
+        v = r.get("value") if isinstance(r, dict) else None
+        if isinstance(v, str) and v and not v.startswith("ERR: "):
+            hint = v
+    except Exception:
+        pass
+    return _merge_scroll_reads(batches), hint
 
 
 def _read_one(tab: dict, args) -> dict:
@@ -591,9 +731,17 @@ def _read_one(tab: dict, args) -> dict:
     # scroll-harvest — auto-scroll to pull lazy-loaded / virtualized content
     if getattr(args, "scroll", False):
         if tab.get("ext_tab_id") is not None and _ext_alive():
-            text = _scroll_read_harvest(tab["ext_tab_id"], steps=getattr(args, "scroll_steps", 40))
+            text, more = _scroll_read_harvest(tab["ext_tab_id"], steps=getattr(args, "scroll_steps", 40))
             if text and not _is_junk(text, kind):
-                return _text_payload(base, "extension+scroll", text, chars)
+                p = _text_payload(base, "extension+scroll", text, chars)
+                if more:
+                    p["pagination"] = more
+                    p["note"] = (f"INCOMPLETE: scrolled to the bottom, but a pagination control "
+                                 f"({more}) is still unclicked, so this page holds more rows than "
+                                 f"were read. Scrolling does not press it. Click it "
+                                 f"(`tab click <ref> --text \"{more.split(' | ')[0]}\"`) and re-read, "
+                                 f"repeating until it disappears, before treating this as the full list.")
+                return p
         else:
             return {**base, "source": "none", "chars": 0, "content": "",
                     "note": "--scroll needs the Handle extension connected (`tab doctor` / `tab ext`)."}
@@ -1385,6 +1533,34 @@ def _click_by_intent(tab: dict, args) -> None:
     sys.exit(1)
 
 
+def cmd_harvest(args) -> None:
+    """Structured read: one row per element matching `selector`, each field a sub-selector.
+
+    Fields take `name=selector[@attr]`, where the attribute may be href, datetime, text or html,
+    and an empty selector means the matched element itself. Runs through the extension, so it
+    works on pages whose CSP refuses `eval` (X, Okta, banks).
+    """
+    tabs = load_tabs()
+    tab = resolve_one(args.ref, tabs)
+    fields: dict[str, str] = {}
+    for spec in args.field or []:
+        if "=" not in spec:
+            print(f"bad --field {spec!r} — use name=selector[@attr]")
+            return
+        name, sel = spec.split("=", 1)
+        fields[name.strip()] = sel.strip()
+    count, rows = _ext_harvest(tab, args.selector, fields, args.limit)
+    if args.json:
+        print(json.dumps({"count": count, "rows": rows}, ensure_ascii=False, indent=2))
+        return
+    print(f"{count} matched {args.selector!r} in {tab['id']} · {tab['title'][:60]}")
+    for row in rows:
+        if isinstance(row, dict):
+            print("  " + "  ·  ".join(f"{k}={str(v)[:60]!r}" for k, v in row.items() if v))
+        else:
+            print("  " + str(row)[:120])
+
+
 def cmd_click(args) -> None:
     tab = resolve_one(args.ref, load_tabs())
     if getattr(args, "intent", None):
@@ -1392,6 +1568,10 @@ def cmd_click(args) -> None:
     if not args.text and not args.selector:
         print("give a CSS selector, --text, or --intent"); sys.exit(1)
     params = {"sel": args.selector, "text": args.text}
+    if getattr(args, "nth", None):
+        params["nth"] = args.nth
+    if getattr(args, "near", None):
+        params["near"] = args.near
     label = args.text or args.selector or ""
     verdict = _guard_or_exit("click", tab, params, label, getattr(args, "confirm", False))
     ok, val = _ext_act(tab, "click", params)
@@ -1468,6 +1648,19 @@ def cmd_watch(args) -> None:
     check = "Boolean(%s)" % args.check
     deadline = time.time() + args.timeout
     sys.stderr.write(f"watching {tab['id']} '{tab['title'][:40]}' every {args.every}s until: {args.check}\n")
+    if args.record:
+        res = rec_start(tab)
+        sys.stderr.write(("recording with Pointer → " + res.get("folder", "") if res.get("ok") else "✗ Pointer: " + str(res.get("error"))) + "\n")
+    try:
+        _watch_loop(tab, args, check, deadline)
+    finally:
+        if args.record:
+            res = rec_stop()
+            if res.get("ok"):
+                print("  recording → " + res["folder"] + "/index.html")
+
+
+def _watch_loop(tab: dict, args, check: str, deadline: float) -> None:
     while time.time() < deadline:
         ok, val = _run_js(tab, check)
         if not ok:
@@ -1482,6 +1675,70 @@ def cmd_watch(args) -> None:
             return
         time.sleep(args.every)
     print(f"timed out after {args.timeout}s — condition never met")
+
+
+# --------------------------------------------------------------------------- #
+# rec — record what Handle does, with Pointer
+# --------------------------------------------------------------------------- #
+# Pointer (~/Applications/Pointer.app) runs watch sessions: the screen at 1 fps
+# plus audio, written up afterwards, with an amber frame on what it records.
+# `tab rec start t7` focuses the tab and records its Chrome window, so a run of
+# click/type/watch steps leaves a replayable trail next to audit.jsonl.
+POINTER = Path.home() / "Applications/Pointer.app/Contents/MacOS/Pointer"
+
+
+def _pointer(*args: str) -> dict:
+    import subprocess
+    if not POINTER.exists():
+        return {"ok": False, "error": f"Pointer not installed at {POINTER}"}
+    proc = subprocess.run([str(POINTER), "--ctl", *args], capture_output=True, text=True, timeout=30)
+    try:
+        return json.loads(proc.stdout)
+    except ValueError:
+        return {"ok": False, "error": (proc.stdout or proc.stderr).strip()[:300]}
+
+
+def rec_start(tab: dict | None, listen: bool = False) -> dict:
+    """Start a Pointer session on the tab's Chrome window (focusing the tab first so
+    the recording shows it), or on whichever screen the mouse is on when tab is None."""
+    if tab is None:
+        target = "follow"
+    else:
+        collect.focus_tab(tab["url"])
+        time.sleep(0.6)
+        # Pointer matches every word against the window title + app name; the
+        # focused tab's title is the window title.
+        words = re.findall(r"\w+", tab["title"])[:8]
+        target = " ".join(words + ["chrome"])
+    res = _pointer("start", target, *(["--listen"] if listen else []))
+    audit.record("rec_start", tab, {"target": target}, result=res.get("folder") or res.get("error", ""),
+                 decision="executed" if res.get("ok") else "error")
+    return res
+
+
+def rec_stop() -> dict:
+    res = _pointer("stop")
+    audit.record("rec_stop", None, {}, result=res.get("folder") or res.get("error", ""),
+                 decision="executed" if res.get("ok") else "error")
+    return res
+
+
+def cmd_rec(args) -> None:
+    if args.action == "start":
+        tab = resolve_one(args.ref, load_tabs()) if args.ref else None
+        res = rec_start(tab, listen=args.listen)
+    elif args.action == "stop":
+        res = rec_stop()
+    else:
+        res = _pointer(args.action)
+    if args.json:
+        print(json.dumps(res, indent=2))
+    elif res.get("ok"):
+        what = res.get("watching", {})
+        label = f"{what.get('app', '')} · {what.get('name', '')}".strip(" ·") if what else ""
+        print(f"✓ {args.action}{' ' + label if label else ''}  {res.get('folder', '')}")
+    else:
+        print("✗ " + str(res.get("error"))); sys.exit(1)
 
 
 # --------------------------------------------------------------------------- #
@@ -2508,6 +2765,96 @@ def cmd_stash(args) -> None:
 # --------------------------------------------------------------------------- #
 # argument wiring
 # --------------------------------------------------------------------------- #
+
+# windows / move — see which tab sits in which window, and move tabs between
+# windows through the extension (chrome.tabs.move keeps the page loaded).
+def _window_names() -> dict[str, str]:
+    return {w["id"]: w["name"] for w in modes_lib.read_windows()}
+
+
+def cmd_windows(args) -> None:
+    tabs = load_tabs(refresh=True)
+    names = _window_names()
+    wins: dict[str, list] = {}
+    for t in tabs:
+        wins.setdefault(str(t.get("window", "")), []).append(t)
+    if args.json:
+        print(json.dumps([{"window": w, "name": names.get(w, ""),
+                           "tabs": [{"handle": t["id"], "title": t["title"], "url": t["url"],
+                                     "summary": t.get("summary", ""), "note": t.get("note", "")}
+                                    for t in ts]}
+                          for w, ts in wins.items()], indent=2))
+        return
+    for w, ts in wins.items():
+        print(f"\n[{names.get(w) or 'unnamed'}]  window {w}  ·  {len(ts)} tabs")
+        for t in ts:
+            print(f"  {t['id']:>5}  {t['title'][:70]}")
+
+
+def cmd_move(args) -> None:
+    if not _ext_alive():
+        print("Handle extension not connected — `tab doctor`, then retry."); sys.exit(1)
+    tabs = load_tabs(refresh=True)
+    picked = []
+    for ref in args.refs:
+        t = resolve_one(ref, tabs)
+        if t.get("ext_tab_id") is None:
+            print(f"{t['id']} has no extension id yet — `tab refresh` and retry."); sys.exit(1)
+        picked.append(t)
+    target = args.to
+    wins = modes_lib.read_windows()
+    match = next((w for w in wins if w["name"].lower() == target.lower()), None)
+    res = _ext_cmd("move", {"tab_ids": [t["ext_tab_id"] for t in picked],
+                            "window_id": int(match["id"]) if match else None})
+    if "error" in res:
+        print(f"Move failed: {res['error']}"); sys.exit(1)
+    if not match:
+        modes_lib.name_window(str(res["window_id"]), target)
+    where = target if match else f"new window {target!r}"
+    print(f"Moved {len(picked)} tab(s) → {where}: " + ", ".join(t["id"] for t in picked))
+
+
+# mode — named Chrome windows that survive being closed (see modes.py)
+def _ago(iso: str) -> str:
+    secs = (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds()
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= n:
+            return f"{int(secs // n)}{unit} ago"
+    return "just now"
+
+
+def cmd_mode(args) -> None:
+    action = getattr(args, "mode_cmd", None) or "list"
+    try:
+        if action == "list":
+            rows = modes_lib.list_modes()
+            if getattr(args, "json", False):
+                print(json.dumps(rows, indent=2)); return
+            if not rows:
+                print("No modes saved. Name a Chrome window (Window → Name Window…), "
+                      "then `tab mode sync`."); return
+            for r in rows:
+                state = "● open" if r["open"] else "○ closed"
+                print(f"  {r['name']:<18} {r['tabs']:>3} tabs  {state:<9} saved {_ago(r['saved'])}")
+        elif action == "sync":
+            changed = modes_lib.sync()
+            if not getattr(args, "quiet", False):
+                print("Saved: " + ", ".join(changed) if changed else "No named window changed.")
+        elif action == "save":
+            r = modes_lib.save(" ".join(args.name), front=args.front)
+            print(f"Saved {r['name']} ({r['tabs']} tabs).")
+        elif action == "open":
+            r = modes_lib.open_mode(" ".join(args.name))
+            print(f"{r['action'].capitalize()} {r['name']} ({r['tabs']} tabs).")
+        elif action == "undo":
+            r = modes_lib.undo(" ".join(args.name))
+            print(f"Restored {r['name']} to the snapshot from {_ago(r['saved'])} ({r['tabs']} tabs).")
+        elif action == "rm":
+            print(f"Removed {modes_lib.remove(' '.join(args.name))}.")
+    except LookupError as exc:
+        print(exc); sys.exit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tab", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2647,6 +2994,10 @@ def build_parser() -> argparse.ArgumentParser:
     ssh.add_argument("--cdp", action="store_true",
                      help="capture via the DevTools Protocol (race-free; needs --remote-debugging-port)")
     ssh.add_argument("--port", type=int, default=cdp.DEFAULT_PORT, help="CDP debug port (default 9222)")
+    ssh.add_argument("--settle", type=int, default=2500, metavar="MS",
+                     help="wait up to MS for rendered content to stop changing before capturing "
+                          "(default 2500; 0 disables). Guards against capturing a frame-based page "
+                          "mid-XHR, which silently returns the previous page's content.")
     ssh.add_argument("--json", action="store_true")
     ssh.set_defaults(func=cmd_shot)
 
@@ -2704,12 +3055,22 @@ def build_parser() -> argparse.ArgumentParser:
     sev.add_argument("js", help="JavaScript expression to evaluate in the page")
     sev.set_defaults(func=cmd_eval)
 
+    shv = sub.add_parser("harvest", help="structured read: one row per element, fields as name=selector[@attr] (CSP-safe)")
+    shv.add_argument("ref")
+    shv.add_argument("selector", help="CSS selector for the repeating element (e.g. article)")
+    shv.add_argument("--field", action="append", help="name=selector[@attr]; attr may be href, datetime, text or html. Repeatable")
+    shv.add_argument("--limit", type=int, default=0, help="stop after N rows (0 = all)")
+    shv.add_argument("--json", action="store_true", help="print rows as JSON")
+    shv.set_defaults(func=cmd_harvest)
+
     sck = sub.add_parser("click", help="click an element in a tab (CSS selector or --text)")
     sck.add_argument("ref")
     sck.add_argument("selector", nargs="?", help="CSS selector to click")
     sck.add_argument("--text", help="click the element whose visible text contains this")
     sck.add_argument("--intent", help="self-healing: find the element by intent (text/role/aria); caches what worked, re-finds it when the DOM drifts")
     sck.add_argument("--confirm", action="store_true", help="execute even if the action looks irreversible (Submit/Send/Pay/Delete…)")
+    sck.add_argument("--nth", type=int, help="when several elements match, click the Nth one (1-based, document order)")
+    sck.add_argument("--near", help="when several elements match, click the one inside the smallest block containing this text (e.g. \"A.Y. 2025-26\")")
     sck.set_defaults(func=cmd_click)
 
     sty = sub.add_parser("type", help="type text into a field (CSS selector; pierces shadow DOM; pass \"\" to auto-find a message composer)")
@@ -2736,7 +3097,15 @@ def build_parser() -> argparse.ArgumentParser:
     swt.add_argument("--click", help="CSS selector to click when the condition fires")
     swt.add_argument("--do", help="JS to run when the condition fires")
     swt.add_argument("--say", help="custom notification text")
+    swt.add_argument("--record", action="store_true", help="record the tab's window with Pointer while watching")
     swt.set_defaults(func=cmd_watch)
+
+    src2 = sub.add_parser("rec", help="record what happens in a tab's window with Pointer (start/stop/status/peek)")
+    src2.add_argument("action", choices=["start", "stop", "status", "peek", "cancel"])
+    src2.add_argument("ref", nargs="?", help="tab to record (start); omit to follow the mouse across screens")
+    src2.add_argument("--listen", action="store_true", help="Pointer's listen mode (suggests questions)")
+    src2.add_argument("--json", action="store_true")
+    src2.set_defaults(func=cmd_rec)
 
     smt = sub.add_parser("meeting", help="open a Zoom recording share link, clear registration/passcode, scrape its transcript to meetings/")
     smt.add_argument("url", help="Zoom /rec/share/ recording link")
@@ -2856,13 +3225,50 @@ def build_parser() -> argparse.ArgumentParser:
     sscan.add_argument("--json", action="store_true")
     sscan.set_defaults(func=cmd_stash)
 
+    # -- windows / move -------------------------------------------------------
+    sw = sub.add_parser("windows", help="tabs grouped by Chrome window, with window names")
+    sw.add_argument("--json", action="store_true")
+    sw.set_defaults(func=cmd_windows)
+    smv = sub.add_parser("move", help="move tabs to a named window (created if none)")
+    smv.add_argument("refs", nargs="+", help="tab references (t7, fuzzy, active)")
+    smv.add_argument("--to", required=True, help="window name, e.g. Read")
+    smv.set_defaults(func=cmd_move)
+
+    # -- mode: named Chrome windows that survive being closed ------------------
+    mst = sub.add_parser("mode", help="save/reopen named Chrome windows (Work, Read, …)")
+    msub = mst.add_subparsers(dest="mode_cmd")
+    ml = msub.add_parser("list", help="saved modes (default)")
+    ml.add_argument("--json", action="store_true")
+    ml.set_defaults(func=cmd_mode)
+    ms = msub.add_parser("sync", help="snapshot every named window")
+    ms.add_argument("--quiet", action="store_true")
+    ms.set_defaults(func=cmd_mode)
+    msv = msub.add_parser("save", help="snapshot one named window now")
+    msv.add_argument("name", nargs="+")
+    msv.add_argument("--front", action="store_true",
+                     help="name the frontmost window NAME first, then save it")
+    msv.set_defaults(func=cmd_mode)
+    for verb, h in (("open", "reopen a mode's window (or focus it if open)"),
+                    ("undo", "restore the previous snapshot of a mode"),
+                    ("rm", "delete a saved mode")):
+        mp = msub.add_parser(verb, help=h)
+        mp.add_argument("name", nargs="+")
+        mp.set_defaults(func=cmd_mode)
+    mst.set_defaults(func=cmd_mode, mode_cmd=None)
+
     sst.set_defaults(func=cmd_stash, stash_cmd=None)
     return p
 
 
 def main(argv=None) -> None:
     args = build_parser().parse_args(argv)
-    args.func(args)
+    # Any command that resolves a dead handle exits with the stale-index message rather
+    # than a traceback — and, critically, never with a silently wrong tab.
+    try:
+        args.func(args)
+    except StaleHandle as exc:
+        print(exc.message())
+        sys.exit(1)
 
 
 if __name__ == "__main__":

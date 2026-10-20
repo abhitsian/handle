@@ -57,11 +57,23 @@ def read_chrome_tabs() -> list[dict]:
     """Return every open Chrome tab as {window,index,url,title,snippet}."""
     if not APPLESCRIPT.exists():
         raise RuntimeError(f"Missing AppleScript file: {APPLESCRIPT}")
-    proc = subprocess.run(
-        ["osascript", str(APPLESCRIPT)],
-        capture_output=True, text=True, encoding="utf-8",
-        errors="replace", timeout=180,
-    )
+    # 45s, not 180s: the MCP wrapper gives the whole CLI call 60s, so a 180s AppleScript
+    # scan could only ever surface as an opaque `spawnSync python3 ETIMEDOUT`. Failing
+    # inside the caller's budget lets the real reason reach the caller. (Papercut 2026-08-19)
+    try:
+        proc = subprocess.run(
+            ["osascript", str(APPLESCRIPT)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=45,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            "Chrome tab scan via AppleScript timed out after 45s. Chrome is usually "
+            "blocked on a modal dialog or an unresponsive tab.\n"
+            "  Handle does not need AppleScript when its Chrome extension is connected — "
+            "start the board (`python3 app.py`) and check `tab ext`.\n"
+            "  Otherwise dismiss any open Chrome dialog and retry."
+        ) from None
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "osascript failed")
 
@@ -381,34 +393,71 @@ def active_tab_url() -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def focus_tab(url: str) -> bool:
-    """Bring the tab matching `url` to the front and activate Chrome."""
-    safe = url.replace("\\", "\\\\").replace('"', '\\"')
-    script = (
-        'tell application "Google Chrome"\n'
-        '  repeat with w in windows\n'
-        '    set i to 0\n'
-        '    repeat with t in tabs of w\n'
-        '      set i to i + 1\n'
-        f'      if (URL of t) is "{safe}" then\n'
-        '        set active tab index of w to i\n'
-        '        set index of w to 1\n'
-        '        activate\n'
-        '        return "ok"\n'
-        '      end if\n'
-        '    end repeat\n'
-        '  end repeat\n'
-        '  return "notfound"\n'
-        'end tell'
-    )
+def _focus_prefixes(url: str) -> list[str]:
+    """Progressively looser URL prefixes to match a tab on, most exact first.
+
+    Papercut (2026-08-15, handle): `shot` on the Outlook and Gmail tabs failed with
+    "tab not found in Chrome" even though `list` and `find` had just returned them.
+    Both are SPAs — Chrome's live URL drifts as you navigate inside the app
+    (…/calendar → …/calendar/view/week), while state.json still holds the URL from
+    the last scan. An exact string compare can never match that, so matching falls
+    back to the path-without-query, then to the origin plus first path segment.
+    """
+    # out[0] is compared with `is` (exact); every later entry with `starts with`.
+    # A candidate equal to out[0] therefore still earns a slot, because as a prefix it
+    # matches the deeper URL an SPA has since navigated to.
+    loose: list[str] = []
+    base = url.split("#", 1)[0].split("?", 1)[0]
+    if base:
+        loose.append(base)
     try:
-        proc = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=30,
+        scheme, rest = url.split("://", 1)
+        host, _, path = rest.partition("/")
+        seg = path.split("?", 1)[0].split("#", 1)[0].split("/", 1)[0]
+        loose.append(f"{scheme}://{host}/" + (seg if seg else ""))
+    except ValueError:
+        pass
+    seen: set[str] = set()
+    return [url] + [c for c in loose if c and not (c in seen or seen.add(c))]
+
+
+def focus_tab(url: str) -> bool:
+    """Bring the tab matching `url` to the front and activate Chrome.
+
+    Tries an exact URL match first, then looser prefixes, so a single-page app that
+    has navigated since the last scan is still found instead of reported missing.
+    """
+    for i, candidate in enumerate(_focus_prefixes(url)):
+        safe = candidate.replace("\\", "\\\\").replace('"', '\\"')
+        # The first pass is an exact compare; later passes accept a prefix.
+        test = f'(URL of t) is "{safe}"' if i == 0 else f'(URL of t) starts with "{safe}"'
+        script = (
+            'tell application "Google Chrome"\n'
+            '  repeat with w in windows\n'
+            '    set i to 0\n'
+            '    repeat with t in tabs of w\n'
+            '      set i to i + 1\n'
+            f'      if {test} then\n'
+            '        set active tab index of w to i\n'
+            '        set index of w to 1\n'
+            '        activate\n'
+            '        return "ok"\n'
+            '      end if\n'
+            '    end repeat\n'
+            '  end repeat\n'
+            '  return "notfound"\n'
+            'end tell'
         )
-    except Exception:
-        return False
-    return proc.returncode == 0 and "ok" in proc.stdout
+        try:
+            proc = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception:
+            return False
+        if proc.returncode == 0 and "ok" in proc.stdout:
+            return True
+    return False
 
 
 # JS that prefers the main article/content element so reads skip nav, header,
@@ -699,7 +748,10 @@ def screenshot_tab(url: str, full: bool = False, max_shots: int = 6):
     Needs macOS Screen Recording permission for the terminal running this.
     """
     if not focus_tab(url):
-        return [], "tab not found in Chrome"
+        return [], ("tab not found in Chrome by URL (tried exact, then prefix matches) — "
+                    "the tab has probably navigated since the last scan. "
+                    "Run `tab refresh`, or connect the Handle extension, which captures "
+                    "by tab id and does not depend on the URL matching at all.")
     SHOTS_DIR.mkdir(exist_ok=True)
     time.sleep(0.6)  # let the window come forward and settle
     key = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
