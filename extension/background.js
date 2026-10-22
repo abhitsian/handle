@@ -745,39 +745,50 @@ async function showAction(tabId, a) {
         return { error: `refused to click "${name}"` };
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       await sleep(400);
-      const r = el.getBoundingClientRect();
-      if (a.ring || a.manual) {
-      const ring = document.createElement("div");
-      Object.assign(ring.style, {
-        position: "fixed", left: `${r.left - 6}px`, top: `${r.top - 6}px`, width: `${r.width + 12}px`, height: `${r.height + 12}px`,
-        border: `2px solid ${a.ringColor || "#1f6feb"}`, borderRadius: "12px", boxShadow: "0 0 0 4px rgba(31,111,235,.18)",
-        zIndex: 2147483647, pointerEvents: "none", transition: "opacity .4s",
-      });
-      document.documentElement.appendChild(ring);
-      ring.dataset.handleShow = "1";
-      if (!a.manual) setTimeout(() => { ring.style.opacity = "0"; setTimeout(() => ring.remove(), 450); }, a.hold || ((a.dwell || 3) * 1000 - 300));
+      // element box in top-window coordinates (targets inside same-origin frames are offset by their frame)
+      const r0 = el.getBoundingClientRect();
+      let ox = 0, oy = 0;
+      for (let w = el.ownerDocument.defaultView; w && w.frameElement; w = w.parent) {
+        const fr = w.frameElement.getBoundingClientRect(); ox += fr.left; oy += fr.top;
       }
+      const r = { left: r0.left + ox, top: r0.top + oy, width: r0.width, height: r0.height };
+      // screen point for the real cursor: window screen origin + browser chrome
+      // (vertical tabs on the left, toolbars on top) + the element's left-centre
+      const W = window.top;
+      const px = Math.min(r.width / 2, 60), py = r.height / 2;
+      const sx = W.screenX + (W.outerWidth - W.innerWidth) + r.left + px;
+      const sy = W.screenY + (W.outerHeight - W.innerHeight) + r.top + py;
       if (a.click) {
-        await sleep(150);
-        const x = r.left + r.width / 2, y = r.top + r.height / 2;
-        const o = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, view: window };
-        el.dispatchEvent(new PointerEvent("pointerdown", { ...o, pointerType: "mouse", isPrimary: true }));
-        el.dispatchEvent(new MouseEvent("mousedown", o));
-        el.dispatchEvent(new PointerEvent("pointerup", { ...o, pointerType: "mouse", isPrimary: true }));
-        el.dispatchEvent(new MouseEvent("mouseup", o));
-        el.dispatchEvent(new MouseEvent("click", o));
+        // only click if this element is what sits under that point
+        let hit = el.ownerDocument.elementFromPoint(r0.left + px, r0.top + py);
+        while (hit && hit.shadowRoot) {
+          const inner = hit.shadowRoot.elementFromPoint(r0.left + px, r0.top + py);
+          if (!inner || inner === hit) break;
+          hit = inner;
+        }
+        const within = (x, y) => { for (let n = x; n; n = n.parentElement || (n.getRootNode && n.getRootNode().host)) if (n === y) return true; return false; };
+        if (!hit || !(within(hit, el) || within(el, hit))) return { error: `"${name}" is covered at its position; not clicking` };
       }
-      return { ok: true, did: a.click ? "clicked" : "showed", name };
+      return { ok: true, did: a.click ? "clicked" : "showed", name, x: sx, y: sy };
     },
   });
-  return res.result;
+  const out = res.result;
+  if (out && out.ok && !a.probe) {
+    // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
+    const m = await fetch("http://127.0.0.1:4911/move", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x: out.x, y: out.y, click: !!a.click }),
+    }).then((x) => x.json()).catch((e) => ({ error: `mouse helper not running: ${e}` }));
+    if (m.error) return { error: m.error };
+  }
+  return out;
 }
 
 // Autopilot over a page's show script. play() runs the remaining steps, waiting
 // each step's `dwell` seconds (time to say the matching talk-track lines).
 // pause() stops after the current step; pause() while paused resets the page.
 // A real click, scroll or keypress by the presenter on the page pauses it, and a
-// `manual` step rings the element and pauses for the presenter to act.
+// A `manual` step points at the element and pauses for the presenter to act.
 const showRuns = {}; // tabId -> { playing }
 
 async function showCtx() {
