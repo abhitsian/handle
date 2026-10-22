@@ -481,6 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.sharingType = .none  // left out of screenshots and screen sharing that honour it
         panel.contentView = FirstClickHostingView(rootView: ContentView(m: model))
         panel.setFrameAutosaveName("AutopilotPanel2")
         // keep the whole window on one screen; if it hangs off an edge, put it top-right of the menu-bar display
