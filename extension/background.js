@@ -682,12 +682,14 @@ async function runStatus() {
 
 // Step to the adjacent tab in the focused window; stops at the first and last tab.
 async function stepTab(delta) {
-  const [cur] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!cur) return;
+  const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+  const [cur] = await chrome.tabs.query({ active: true, windowId: win.id });
+  if (!cur) return { error: "no active tab" };
   const [next] = await chrome.tabs.query({ windowId: cur.windowId, index: cur.index + delta });
-  if (!next) return;
+  if (!next) return { window_id: win.id, at: cur.index, error: "no tab there" };
   if (next.groupId !== -1) await chrome.tabGroups.update(next.groupId, { collapsed: false });
   await chrome.tabs.update(next.id, { active: true });
+  return { window_id: win.id, from: cur.index, to: next.index };
 }
 
 chrome.commands.onCommand.addListener((command) => {
@@ -715,6 +717,7 @@ async function dispatch(cmd) {
     case "run_set": return await runSet(params.steps, params.window_id);
     case "run_go": return await runGo(params);
     case "run_status": return await runStatus();
+    case "tab_step": return await stepTab(params.delta || 1);
     case "reload_ext": setTimeout(() => chrome.runtime.reload(), 200); return { reloading: true };
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };
