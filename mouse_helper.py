@@ -3,7 +3,8 @@
 Runs on 127.0.0.1:4911. POST /move {"x":..,"y":..,"click":bool} glides the
 cursor to screen point (x, y) in global display points, then optionally
 clicks. With "paste": text it then pastes that text (Cmd+V); with "clear": true
-it selects all and deletes (Cmd+A, Delete). It never sends Return. Must be started from a process with Accessibility permission
+it selects all and deletes (Cmd+A, Delete); with "scroll": n it turns the
+wheel n lines (positive = down). It never sends Return. Must be started from a process with Accessibility permission
 (e.g. Terminal): `python3 mouse_helper.py`.
 """
 import json
@@ -23,8 +24,10 @@ def _pos():
 
 
 def _post(kind, x, y):
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap,
-                       Quartz.CGEventCreateMouseEvent(None, kind, (x, y), Quartz.kCGMouseButtonLeft))
+    e = Quartz.CGEventCreateMouseEvent(None, kind, (x, y), Quartz.kCGMouseButtonLeft)
+    if kind in (Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp):
+        Quartz.CGEventSetIntegerValueField(e, Quartz.kCGMouseEventClickState, 1)  # a single click, as macOS sends it
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
 
 
 def glide(x, y):
@@ -81,6 +84,15 @@ class H(BaseHTTPRequestHandler):
         a = json.loads(self.rfile.read(n) or b"{}")
         x, y = float(a["x"]), float(a["y"])
         glide(x, y)
+        if a.get("scroll"):
+            # real wheel ticks, a few at a time like a hand on a mouse; positive scrolls down
+            lines = int(a["scroll"])
+            for _ in range(abs(lines)):
+                e = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 1, -1 if lines > 0 else 1)
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
+                time.sleep(0.03)
+            self._send(200, {"ok": True, "pos": _pos()})
+            return
         if a.get("click"):
             time.sleep(0.12)
             click(x, y)

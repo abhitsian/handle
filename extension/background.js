@@ -697,6 +697,20 @@ async function stepTab(delta) {
 // Scripts live in chrome.storage.local "shows" (set over the bridge), matched by
 // tab group title and the URL the tab had on its first press.
 async function showAction(tabId, a) {
+  // wheel the page (real scroll events) until the target is on screen, then act
+  for (let k = 0; k < 8; k++) {
+    const out = await showActionOnce(tabId, a);
+    if (!out || !out.offscreen) return out;
+    const win = await chrome.windows.get((await chrome.tabs.get(tabId)).windowId);
+    const x = win.left + (win.width - out.iw) + out.cx, y = win.top + (win.height - out.ih) + out.ih / 2;
+    await fetch("http://127.0.0.1:4911/move", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x, y, scroll: 4 * out.offscreen }) }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 450));
+  }
+  return { error: `"${a.text}" stayed off screen after scrolling; not clicking` };
+}
+
+async function showActionOnce(tabId, a) {
   // "{ts}" in pasted text becomes a short unique token (e.g. a fresh widget ID per run)
   if (a.paste && a.paste.includes("{ts}")) a = { ...a, paste: a.paste.replace(/\{ts\}/g, Date.now().toString(36).slice(-5)) };
   const [res] = await chrome.scripting.executeScript({
@@ -729,7 +743,7 @@ async function showAction(tabId, a) {
         // clicks prefer real controls, then fall back to any element with the text
         // (some nav items are plain divs with click handlers)
         for (const all of a.click ? [vis.filter(clickable), vis] : [vis]) {
-          for (const test of [(t) => t === q, (t) => t.startsWith(q), (t) => t.includes(q)]) {
+          for (const test of a.exact ? [(t) => t === q] : [(t) => t === q, (t) => t.startsWith(q), (t) => t.includes(q)]) {
             const hits = all.filter((e) => test(label(e)));
             if (hits.length) return hits.sort((x, y) => area(x) - area(y))[a.nth || 0] || hits[0];
           }
@@ -746,7 +760,31 @@ async function showAction(tabId, a) {
       if (a.click && !a.allow && /\b(save|publish|reset|delete|remove|clone|approve|reject|submit|update|create new theme)\b/.test(name))
         return { error: `refused to click "${name}"` };
       el.scrollIntoView({ block: "center", behavior: "smooth" });
-      await sleep(400);
+      // wait for the smooth scroll to settle; if the element is still outside the window, jump it into view
+      const inView = () => {
+        const b = el.getBoundingClientRect();
+        let oy = 0;
+        for (let w = el.ownerDocument.defaultView; w && w.frameElement; w = w.parent) oy += w.frameElement.getBoundingClientRect().top;
+        return b.top + oy >= 0 && b.bottom + oy <= window.top.innerHeight;
+      };
+      let last = -1;
+      for (let k = 0; k < 20; k++) {
+        await sleep(100);
+        const t = el.getBoundingClientRect().top;
+        if (t === last && inView()) break;
+        last = t;
+      }
+      if (!inView()) { el.scrollIntoView({ block: "center" }); await sleep(250); }
+      if (!inView() && !a.probe) {
+        // the page does not scroll from script (custom scroller): ask for real wheel ticks
+        window.__handleShowOwnUntil = Date.now() + 2500;
+        const b = el.getBoundingClientRect();
+        let ox = 0;
+        for (let w = el.ownerDocument.defaultView; w && w.frameElement; w = w.parent) ox += w.frameElement.getBoundingClientRect().left;
+        const iw = window.top.innerWidth;
+        return { offscreen: b.top > 0 ? 1 : -1, name: label(el).slice(0, 60), iw, ih: window.top.innerHeight,
+          cx: Math.max(10, Math.min(iw - 10, ox + b.left + Math.min(b.width / 2, 60))) };
+      }
       // element box in top-window coordinates (targets inside same-origin frames are offset by their frame)
       const r0 = el.getBoundingClientRect();
       let ox = 0, oy = 0;
@@ -773,17 +811,20 @@ async function showAction(tabId, a) {
         const within = (x, y) => { for (let n = x; n; n = n.parentElement || (n.getRootNode && n.getRootNode().host)) if (n === y) return true; return false; };
         if (!hit || !(within(hit, el) || within(el, hit))) return { error: `"${name}" is covered at its position; not clicking` };
       }
+      // retry path: the real click did not take, so click from script
+      if (a.click && a.synthetic) { el.click(); return { ok: true, did: "clicked (script)", name }; }
       // the coming real click is ours: the override watcher ignores input until then
       if (a.click) window.__handleShowOwnUntil = Date.now() + (a.paste || a.clear ? 5000 : 2500);
       return { ok: true, did: a.click ? "clicked" : "showed", name, cx, cy, iw, ih };
     },
   });
   const out = res.result;
-  if (out && out.ok && !a.probe) {
+  if (out && out.ok && !a.probe && !a.synthetic) {
     // screen point = window origin + browser chrome (vertical tabs on the left, toolbars on top) + page point
     const win = await chrome.windows.get((await chrome.tabs.get(tabId)).windowId);
     // keystrokes go to the focused app: bring the demo window forward first
-    if (a.paste || a.clear) { await chrome.windows.update(win.id, { focused: true }); await new Promise((r) => setTimeout(r, 250)); }
+    // a click or keystroke into a window in the background is spent focusing it: bring it forward first
+    if ((a.click || a.paste || a.clear) && !win.focused) { await chrome.windows.update(win.id, { focused: true }); await new Promise((r) => setTimeout(r, 250)); }
     out.x = win.left + (win.width - out.iw) + out.cx;
     out.y = win.top + (win.height - out.ih) + out.cy;
     // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
@@ -841,7 +882,11 @@ async function showCtx() {
   const key = `show-${tab.id}`;
   const st = (await chrome.storage.session.get(key))[key] || { i: 0, start: tab.url };
   const group = tab.groupId !== -1 ? (await chrome.tabGroups.get(tab.groupId)).title : "";
-  const script = shows.find((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st.start));
+  // a tab pinned to a flow keeps it wherever the page has wandered; otherwise match by URL
+  const { pins = {} } = await chrome.storage.local.get("pins");
+  const script = pins[tab.id] != null ? shows[pins[tab.id]]
+    : shows.find((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st.start));
+  if (script?.start) st.start = script.start;
   return { tab, key, st, script, group, winId };
 }
 
@@ -863,7 +908,8 @@ async function publish() {
     for (const t of (await chrome.tabs.query({ windowId: c.winId })).sort((a, b) => a.index - b.index)) {
       const group = groups[t.groupId] || "";
       const st = (await chrome.storage.session.get(`show-${t.id}`))[`show-${t.id}`];
-      const has = shows.some((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st?.start || t.url));
+      const { pins = {} } = await chrome.storage.local.get("pins");
+      const has = pins[t.id] != null || shows.some((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st?.start || t.url));
       state.tabs.push({ id: t.id, title: t.title, group, active: t.active, flow: has });
     }
   }
@@ -899,7 +945,14 @@ async function watchOverride(tabId) {
 // Run one step at the current position; returns false if it failed.
 async function showRunOne(c, run) {
   const step = c.script.steps[c.st.i];
-  const out = await showAction(c.tab.id, step).catch((e) => ({ error: String(e) }));
+  let out = await showAction(c.tab.id, step).catch((e) => ({ error: String(e) }));
+  // the click before this step may not have taken (page still settling): redo it once, then retry
+  const prev = c.st.i > 0 && c.script.steps[c.st.i - 1];
+  if (out?.error?.startsWith("not found") && prev?.click && !prev.paste) {
+    await showAction(c.tab.id, { ...prev, synthetic: true }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1500));
+    out = await showAction(c.tab.id, step).catch((e) => ({ error: String(e) }));
+  }
   if (!out || !out.ok) {
     run.playing = false; run.error = (out && out.error) || "step failed";
     badge(c.tab.id, "!", "#d1242f"); await publish(); return false;
@@ -950,7 +1003,8 @@ async function showReset() {
   const run = showRuns[c.tab.id];
   if (run) { run.playing = false; run.error = ""; }
   await chrome.storage.session.set({ [c.key]: { i: 0, start: c.st.start } });
-  if (c.tab.url !== c.st.start) await chrome.tabs.update(c.tab.id, { url: c.st.start });
+  // always reload: single-page apps keep their inner state when the URL is unchanged
+  await chrome.tabs.update(c.tab.id, { url: c.st.start });
   badge(c.tab.id, "", null);
   await publish();
   return { reset: true };
@@ -1060,7 +1114,7 @@ async function dispatch(cmd) {
     case "run_go": return await runGo(params);
     case "run_status": return await runStatus();
     case "tab_step": return await stepTab(params.delta || 1);
-    case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
+    case "show_set": await chrome.storage.local.set({ shows: params.shows || [], pins: params.pins || {} }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
     case "tab_new": {
       const after = await chrome.tabs.get(params.after_tab_id);
