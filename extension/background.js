@@ -950,7 +950,7 @@ async function publish() {
       const st = (await chrome.storage.session.get(`show-${t.id}`))[`show-${t.id}`];
       const { pins = {} } = await chrome.storage.local.get("pins");
       const has = pins[t.id] != null || shows.some((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st?.start || t.url));
-      state.tabs.push({ id: t.id, title: t.title, group, active: t.active, flow: has });
+      state.tabs.push({ id: t.id, title: t.title, group, active: t.active, flow: has, flowIdx: pins[t.id] ?? null });
     }
   }
   if (c.tab) {
