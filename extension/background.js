@@ -812,7 +812,13 @@ async function showActionOnce(tabId, a) {
         if (!hit || !(within(hit, el) || within(el, hit))) return { error: `"${name}" is covered at its position; not clicking` };
       }
       // retry path: the real click did not take, so click from script
-      if (a.click && a.synthetic) { el.click(); return { ok: true, did: "clicked (script)", name }; }
+      if (a.click && a.synthetic) {
+        // a link navigates its own frame (el.click() can open a new tab from inside classic-UI frames)
+        const link = el.closest ? el.closest("a[href]") : null;
+        if (link && !/^javascript:/i.test(link.getAttribute("href"))) link.ownerDocument.defaultView.location.href = link.href;
+        else el.click();
+        return { ok: true, did: "clicked (script)", name };
+      }
       // the coming real click is ours: the override watcher ignores input until then
       if (a.click) window.__handleShowOwnUntil = Date.now() + (a.paste || a.clear ? 5000 : 2500);
       return { ok: true, did: a.click ? "clicked" : "showed", name, cx, cy, iw, ih };
@@ -923,6 +929,7 @@ async function publish() {
       error: run.error || "", dwellEnd: run.playing ? run.dwellEnd || 0 : 0, dwellMs: run.dwellMs || 0,
     });
   }
+  state.lastPlay = lastPlay;
   await chrome.storage.session.set({ panel: state });
 }
 
@@ -964,7 +971,9 @@ async function showRunOne(c, run) {
   return true;
 }
 
-async function showPlay() {
+let lastPlay = { src: "", at: 0 };
+async function showPlay(src = "bridge") {
+  lastPlay = { src, at: Date.now() };
   const c = await showCtx();
   if (!c.tab) return { error: "no active tab" };
   if (!c.script) { badge(c.tab.id, "?", "#888"); await publish(); return { error: "no show for this page" }; }
@@ -1077,20 +1086,26 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   }
   const p = msg?.panel;
   if (!p) return;
-  const act = {
-    play: () => showPlay(), pause: () => showPauseOnly(), stop: () => showReset(),
-    next: () => showNextStep(), prev: async () => { const c = await showCtx(); return showSetPosition((c.st?.i || 0) - 1); },
-    jump: () => showSetPosition(msg.i), tab: () => showTab(msg.delta, msg.tabId), refresh: () => publish(),
-  }[p];
-  if (act) act().catch((e) => console.warn("panel", e)).finally(() => reply && reply({ ok: true }));
+  panelAct(msg, "panel").catch((e) => console.warn("panel", e)).finally(() => reply && reply({ ok: true }));
   return true;
 });
+
+// One entry point for the controls: the extension panel and the Mac app (over the bridge)
+async function panelAct(msg, src) {
+  const act = {
+    play: () => showPlay(src), pause: () => showPauseOnly(), stop: () => showReset(),
+    toggle: async () => { const c = await showCtx(); return c.tab && showRuns[c.tab.id]?.playing ? showPauseOnly() : showPlay(src); },
+    next: () => showNextStep(), prev: async () => { const c = await showCtx(); return showSetPosition((c.st?.i || 0) - 1); },
+    jump: () => showSetPosition(msg.i), tab: () => showTab(msg.delta, msg.tabId), refresh: () => publish(),
+  }[msg.panel];
+  if (act) await act();
+  await publish();
+  return (await chrome.storage.session.get("panel")).panel || {};
+}
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === "tab-next") showTab(1).catch((e) => console.warn("tab", e));
   if (command === "tab-prev") showTab(-1).catch((e) => console.warn("tab", e));
-  if (command === "show-next") showPlay().catch((e) => console.warn("show", e));
-  if (command === "show-reset") showPause().catch((e) => console.warn("show", e));
 });
 
 async function dispatch(cmd) {
@@ -1124,6 +1139,9 @@ async function dispatch(cmd) {
     }
     case "show_tab": return await showTab(params.delta || 0, params.tab_id);
     case "panel_open": return await openPanel();
+    case "tab_close": await chrome.tabs.remove(params.tab_ids); return { ok: true };
+    case "panel_get": return (await chrome.storage.session.get("panel")).panel || {};
+    case "panel_msg": return await panelAct(params, params.src || "app");
     case "panel_state": await publish(); return (await chrome.storage.session.get("panel")).panel || {};
     case "show_clear": for (const k of Object.keys(showRuns)) showRuns[k].playing = false; await chrome.storage.session.clear(); return { ok: true };
     case "tab_move": return await chrome.tabs.move(params.tab_id, { index: params.index });

@@ -52,7 +52,7 @@ $("stop").onclick = () => send("stop");
 $("tprev").onclick = () => send("tab", { delta: -1 });
 $("tnext").onclick = () => send("tab", { delta: 1 });
 addEventListener("keydown", (e) => {
-  const k = { " ": () => $("play").click(), ArrowRight: () => send("next"), ArrowLeft: () => send("prev"), r: () => send("stop"), "[": () => send("tab", { delta: -1 }), "]": () => send("tab", { delta: 1 }) }[e.key];
+  const k = { ArrowRight: () => send("next"), ArrowLeft: () => send("prev"), r: () => send("stop"), "[": () => send("tab", { delta: -1 }), "]": () => send("tab", { delta: 1 }) }[e.key];
   if (k) { e.preventDefault(); k(); }
 });
 chrome.storage.onChanged.addListener((ch, area) => { if (area === "session" && ch.panel) { state = ch.panel.newValue || {}; render(); } });
