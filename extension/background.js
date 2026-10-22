@@ -716,7 +716,7 @@ async function showAction(tabId, a) {
       const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
       const ROLES = ["button", "link", "tab", "option", "menuitem"];
       const clickable = (e) => /^(BUTTON|A)$/.test(e.tagName) || (e.getAttribute && ROLES.includes(e.getAttribute("role")));
-      const label = (e) => own(e) || norm(e.getAttribute && e.getAttribute("aria-label")) || (a.click ? norm(e.innerText) : "");
+      const label = (e) => own(e) || norm(e.getAttribute && (e.getAttribute("aria-label") || e.getAttribute("alt"))) || (a.click ? norm(e.innerText) : "");
       const area = (e) => { const r = e.getBoundingClientRect(); return r.width * r.height; };
       const find = () => {
         for (const t of [a.text, ...(a.alts || [])]) { const e = findOne(norm(t)); if (e) return e; }
@@ -750,12 +750,12 @@ async function showAction(tabId, a) {
       const ring = document.createElement("div");
       Object.assign(ring.style, {
         position: "fixed", left: `${r.left - 6}px`, top: `${r.top - 6}px`, width: `${r.width + 12}px`, height: `${r.height + 12}px`,
-        border: "3px solid #ff3b30", borderRadius: "10px", boxShadow: "0 0 0 4px rgba(255,59,48,.25)",
+        border: `2px solid ${a.ringColor || "#1f6feb"}`, borderRadius: "12px", boxShadow: "0 0 0 4px rgba(31,111,235,.18)",
         zIndex: 2147483647, pointerEvents: "none", transition: "opacity .4s",
       });
       document.documentElement.appendChild(ring);
       ring.dataset.handleShow = "1";
-      if (!a.manual) setTimeout(() => { ring.style.opacity = "0"; setTimeout(() => ring.remove(), 450); }, a.hold || (a.click ? 900 : 2600));
+      if (!a.manual) setTimeout(() => { ring.style.opacity = "0"; setTimeout(() => ring.remove(), 450); }, a.hold || ((a.dwell || 3) * 1000 - 300));
       }
       if (a.click) {
         await sleep(150);
