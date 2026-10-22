@@ -83,7 +83,7 @@ final class Model: ObservableObject {
 
     // reload the run of show when the file changes
     func loadRun() {
-        let stamp = (try? FileManager.default.attributesOfItem(atPath: Model.runPath)[.modificationDate]) as? Date
+        let stamp = (try? FileManager.default.attributesOfItem(atPath: (Model.runPath as NSString).resolvingSymlinksInPath)[.modificationDate]) as? Date
         guard stamp != runStamp else { return }
         runStamp = stamp
         guard let d = FileManager.default.contents(atPath: Model.runPath),
