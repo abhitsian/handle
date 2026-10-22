@@ -958,9 +958,10 @@ async function publish() {
     const n = c.script ? c.script.steps.length : 0;
     Object.assign(state, {
       tabId: c.tab.id, title: c.tab.title, group: c.group, flow: !!c.script,
-      steps: c.script ? c.script.steps.map(stepLabel) : [], i: c.st.i, n,
+      steps: c.script ? c.script.steps.map(stepLabel) : [], says: c.script ? c.script.steps.map((x) => x.say || "") : [],
+      intro: c.script?.say || "", i: c.st.i, n,
       status: !c.script ? "none" : run.playing ? "playing" : run.error ? "error" : c.st.i >= n ? "done" : c.st.i > 0 ? "paused" : "ready",
-      error: run.error || "", dwellEnd: run.playing ? run.dwellEnd || 0 : 0, dwellMs: run.dwellMs || 0,
+      error: run.error || "", pausedBy: run.playing ? "" : run.pausedBy || "", pausedLate: run.pausedLate, dwellEnd: run.playing ? run.dwellEnd || 0 : 0, dwellMs: run.dwellMs || 0,
     });
   }
   state.lastPlay = lastPlay;
@@ -975,7 +976,7 @@ async function watchOverride(tabId) {
       window.__handleShowWatch = true;
       const stop = (e) => {
         if (!e.isTrusted || e.altKey || Date.now() < (window.__handleShowOwnUntil || 0)) return;
-        chrome.runtime.sendMessage({ type: "show-override" });
+        chrome.runtime.sendMessage({ type: "show-override", kind: e.type, late: Date.now() - (window.__handleShowOwnUntil || 0) });
       };
       for (const t of ["pointerdown", "wheel", "touchstart"]) addEventListener(t, stop, { capture: true, passive: true });
       addEventListener("keydown", stop, { capture: true });
@@ -1022,7 +1023,11 @@ async function showPlay(src = "bridge") {
     badge(c.tab.id, `▶${c.st.i + 1}`, "#1a7f37");
     await publish();
     const step = c.script.steps[c.st.i];
-    if (!(await showRunOne(c, run))) return { error: run.error };
+    run.busy = true;
+    const ok = await showRunOne(c, run);
+    run.busy = false;
+    if (!ok) return { error: run.error };
+    if (!run.playing) break; // paused or jumped while the step ran: leave the position to whoever stopped us
     if (step.manual) { run.playing = false; break; }
     run.skip = false;
     run.dwellMs = (step.dwell || 3) * 1000; run.dwellEnd = Date.now() + run.dwellMs;
@@ -1033,6 +1038,15 @@ async function showPlay(src = "bridge") {
   badge(c.tab.id, c.st.i >= n ? "end" : "II", c.st.i >= n ? "#57606a" : "#bf8700");
   await publish();
   return { at: c.st.i, of: n };
+}
+
+// jump to a step and play from it; a step still running is let finish first, so it cannot move the position after the jump
+async function showJumpPlay(i, src) {
+  const c = await showCtx();
+  const old = c.tab && showRuns[c.tab.id];
+  if (old) { old.playing = false; for (let k = 0; k < 150 && old.busy; k++) await new Promise((r) => setTimeout(r, 100)); }
+  await showSetPosition(i);
+  return await showPlay(src);
 }
 
 async function showPauseOnly() {
@@ -1117,6 +1131,8 @@ chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete"
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.type === "show-override" && sender.tab && showRuns[sender.tab.id]?.playing) {
     showRuns[sender.tab.id].playing = false;
+    showRuns[sender.tab.id].pausedBy = `${msg.kind} on the page`;
+    showRuns[sender.tab.id].pausedLate = msg.late;
     badge(sender.tab.id, "II", "#bf8700");
     publish();
   }
@@ -1132,7 +1148,7 @@ async function panelAct(msg, src) {
     play: () => showPlay(src), pause: () => showPauseOnly(), stop: () => showReset(),
     toggle: async () => { const c = await showCtx(); return c.tab && showRuns[c.tab.id]?.playing ? showPauseOnly() : showPlay(src); },
     next: () => showNextStep(), prev: async () => { const c = await showCtx(); return showSetPosition((c.st?.i || 0) - 1); },
-    jump: () => showSetPosition(msg.i), tab: () => showTab(msg.delta, msg.tabId), refresh: () => publish(),
+    jump: () => showSetPosition(msg.i), jumpplay: () => showJumpPlay(msg.i, src), tab: () => showTab(msg.delta, msg.tabId), refresh: () => publish(),
   }[msg.panel];
   if (act) await act();
   await publish();
