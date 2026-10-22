@@ -85,6 +85,9 @@ class H(BaseHTTPRequestHandler):
             time.sleep(0.12)
             click(x, y)
         if a.get("paste"):
+            if a.get("replace"):
+                time.sleep(0.1)
+                key(KEY_A, cmd=True)
             subprocess.run(["pbcopy"], input=a["paste"].encode(), check=True)
             time.sleep(0.25)
             key(KEY_V, cmd=True)

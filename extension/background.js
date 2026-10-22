@@ -697,6 +697,8 @@ async function stepTab(delta) {
 // Scripts live in chrome.storage.local "shows" (set over the bridge), matched by
 // tab group title and the URL the tab had on its first press.
 async function showAction(tabId, a) {
+  // "{ts}" in pasted text becomes a short unique token (e.g. a fresh widget ID per run)
+  if (a.paste && a.paste.includes("{ts}")) a = { ...a, paste: a.paste.replace(/\{ts\}/g, Date.now().toString(36).slice(-5)) };
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
     args: [a],
@@ -716,7 +718,7 @@ async function showAction(tabId, a) {
       const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
       const ROLES = ["button", "link", "tab", "option", "menuitem"];
       const clickable = (e) => /^(BUTTON|A)$/.test(e.tagName) || (e.getAttribute && ROLES.includes(e.getAttribute("role")));
-      const label = (e) => own(e) || norm(e.getAttribute && (e.getAttribute("aria-label") || e.getAttribute("alt"))) || (a.click ? norm(e.innerText) : "");
+      const label = (e) => own(e) || norm(e.getAttribute && (e.getAttribute("aria-label") || e.getAttribute("alt") || e.getAttribute("placeholder"))) || (a.click ? norm(e.innerText) : "");
       const area = (e) => { const r = e.getBoundingClientRect(); return r.width * r.height; };
       const find = () => {
         for (const t of [a.text, ...(a.alts || [])]) { const e = findOne(norm(t)); if (e) return e; }
@@ -741,7 +743,7 @@ async function showAction(tabId, a) {
       if (a.probe) return { ok: true, did: "found", name: label(el).slice(0, 60) };
       for (let k = 0; k < (a.up || 0); k++) el = el.parentElement || (el.getRootNode() && el.getRootNode().host) || el;
       const name = label(el).slice(0, 60);
-      if (a.click && /\b(save|publish|reset|delete|remove|clone|approve|reject|submit|update|create new theme)\b/.test(name))
+      if (a.click && !a.allow && /\b(save|publish|reset|delete|remove|clone|approve|reject|submit|update|create new theme)\b/.test(name))
         return { error: `refused to click "${name}"` };
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       await sleep(400);
@@ -787,7 +789,7 @@ async function showAction(tabId, a) {
     // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
     const m = await fetch("http://127.0.0.1:4911/move", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ x: out.x, y: out.y, click: !!a.click, paste: a.paste || "", clear: !!a.clear }),
+      body: JSON.stringify({ x: out.x, y: out.y, click: !!a.click, paste: a.paste || "", clear: !!a.clear, replace: !!a.replace }),
     }).then((x) => x.json()).catch((e) => ({ error: `mouse helper not running: ${e}` }));
     if (m.error) return { error: m.error };
     if (a.paste || a.clear) {
@@ -796,13 +798,13 @@ async function showAction(tabId, a) {
         target: { tabId }, args: [a],
         func: (a) => {
           const boxes = [];
-          const walk = (root) => { for (const el of root.querySelectorAll("*")) { if (el.shadowRoot) walk(el.shadowRoot); if (el.tagName === "TEXTAREA" && (el.getAttribute("aria-label") || el.placeholder || "") === a.text) boxes.push(el); } };
+          const walk = (root) => { for (const el of root.querySelectorAll("*")) { if (el.shadowRoot) walk(el.shadowRoot); if (/^(TEXTAREA|INPUT)$/.test(el.tagName) && (el.getAttribute("aria-label") || el.placeholder || "") === a.text) boxes.push(el); } };
           walk(document);
           const box = boxes[0];
           if (!box) return { box: false };
           const want = a.paste || "";
           if (box.value === want) return { box: true, typed: "keys" };
-          const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+          const set = Object.getOwnPropertyDescriptor((box.tagName === "INPUT" ? HTMLInputElement : HTMLTextAreaElement).prototype, "value").set;
           box.focus(); set.call(box, want);
           box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertFromPaste", data: want }));
           box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -1060,6 +1062,12 @@ async function dispatch(cmd) {
     case "tab_step": return await stepTab(params.delta || 1);
     case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
+    case "tab_new": {
+      const after = await chrome.tabs.get(params.after_tab_id);
+      const t = await chrome.tabs.create({ windowId: after.windowId, index: after.index + 1, url: params.url, active: false });
+      if (after.groupId !== -1) await chrome.tabs.group({ tabIds: [t.id], groupId: after.groupId });
+      return { tab_id: t.id };
+    }
     case "show_tab": return await showTab(params.delta || 0, params.tab_id);
     case "panel_open": return await openPanel();
     case "panel_state": await publish(); return (await chrome.storage.session.get("panel")).panel || {};
