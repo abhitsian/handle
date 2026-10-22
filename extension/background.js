@@ -607,6 +607,27 @@ async function moveTabs(tabIds, windowId) {
   return { window_id: target, moved: tabIds.length };
 }
 
+// Open a new window whose tabs sit in named, colored native tab groups.
+// groups: [{ title, color, urls: [..] }]; ungrouped: urls opened after the groups.
+async function openGroupedWindow(groups, ungrouped) {
+  if (!groups || !groups.length) return { error: "no groups" };
+  const w = await chrome.windows.create({ url: groups[0].urls[0], focused: true });
+  const first = w.tabs[0].id;
+  const made = [];
+  for (const [gi, g] of groups.entries()) {
+    const ids = gi === 0 ? [first] : [];
+    for (const url of gi === 0 ? g.urls.slice(1) : g.urls) {
+      ids.push((await chrome.tabs.create({ windowId: w.id, url, active: false })).id);
+    }
+    const groupId = await chrome.tabs.group({ tabIds: ids, createProperties: { windowId: w.id } });
+    await chrome.tabGroups.update(groupId, { title: g.title, color: g.color || "grey", collapsed: false });
+    made.push({ title: g.title, group_id: groupId, tabs: ids.length });
+  }
+  for (const url of ungrouped || []) await chrome.tabs.create({ windowId: w.id, url, active: false });
+  await chrome.tabs.update(first, { active: true });
+  return { window_id: w.id, groups: made };
+}
+
 async function dispatch(cmd) {
   const { method, params = {} } = cmd;
   const tabId = params.tab_id;
@@ -623,6 +644,7 @@ async function dispatch(cmd) {
     case "record_start": return await startRecording();
     case "record_stop": return await stopRecording();
     case "move": return await moveTabs(params.tab_ids, params.window_id);
+    case "window": return await openGroupedWindow(params.groups, params.ungrouped);
     case "reload_ext": setTimeout(() => chrome.runtime.reload(), 200); return { reloading: true };
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };
