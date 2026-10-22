@@ -756,8 +756,10 @@ async function showAction(tabId, a) {
       // (vertical tabs on the left, toolbars on top) + the element's left-centre
       const W = window.top;
       const px = Math.min(r.width / 2, 60), py = r.height / 2;
-      const sx = W.screenX + (W.outerWidth - W.innerWidth) + r.left + px;
-      const sy = W.screenY + (W.outerHeight - W.innerHeight) + r.top + py;
+      // page-relative point; the background adds the window's screen position
+      // (window.screenX/outerWidth read 0 on some pages, so they are not used)
+      const cx = r.left + px, cy = r.top + py, iw = W.innerWidth, ih = W.innerHeight;
+      if (cx < 0 || cy < 0 || cx > iw || cy > ih) return { error: `"${name}" is off screen at ${Math.round(cx)},${Math.round(cy)}; not clicking` };
       if (a.click) {
         // only click if this element is what sits under that point
         let hit = el.ownerDocument.elementFromPoint(r0.left + px, r0.top + py);
@@ -771,11 +773,15 @@ async function showAction(tabId, a) {
       }
       // the coming real click is ours: the override watcher ignores input until then
       if (a.click) window.__handleShowOwnUntil = Date.now() + 2500;
-      return { ok: true, did: a.click ? "clicked" : "showed", name, x: sx, y: sy };
+      return { ok: true, did: a.click ? "clicked" : "showed", name, cx, cy, iw, ih };
     },
   });
   const out = res.result;
   if (out && out.ok && !a.probe) {
+    // screen point = window origin + browser chrome (vertical tabs on the left, toolbars on top) + page point
+    const win = await chrome.windows.get((await chrome.tabs.get(tabId)).windowId);
+    out.x = win.left + (win.width - out.iw) + out.cx;
+    out.y = win.top + (win.height - out.ih) + out.cy;
     // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
     const m = await fetch("http://127.0.0.1:4911/move", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1032,6 +1038,7 @@ async function dispatch(cmd) {
     case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
     case "panel_open": return await openPanel();
+    case "panel_state": await publish(); return (await chrome.storage.session.get("panel")).panel || {};
     case "show_clear": for (const k of Object.keys(showRuns)) showRuns[k].playing = false; await chrome.storage.session.clear(); return { ok: true };
     case "tab_move": return await chrome.tabs.move(params.tab_id, { index: params.index });
     case "show_pause": return await showPause();
