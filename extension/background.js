@@ -700,7 +700,8 @@ async function showAction(tabId, a) {
   // wheel the page (real scroll events) until the target is on screen, then act
   for (let k = 0; k < 8; k++) {
     const out = await showActionOnce(tabId, a);
-    if (!out || !out.offscreen) return out;
+    if (!out || !(out.offscreen || out.moved)) return out;
+    if (out.moved) { await new Promise((r) => setTimeout(r, 700)); continue; } // measure again once the page settles
     const win = await chrome.windows.get((await chrome.tabs.get(tabId)).windowId);
     const z = await chrome.tabs.getZoom(tabId).catch(() => 1); // page px are CSS px: scale by the tab's zoom
     const x = win.left + (win.width - out.iw * z) + out.cx * z, y = win.top + (win.height - out.ih * z) + out.ih * z / 2;
@@ -708,7 +709,7 @@ async function showAction(tabId, a) {
       body: JSON.stringify({ x, y, scroll: 4 * out.offscreen }) }).catch(() => {});
     await new Promise((r) => setTimeout(r, 450));
   }
-  return { error: `"${a.text}" stayed off screen after scrolling; not clicking` };
+  return { error: `"${a.text}" stayed off screen or kept moving; not clicking` };
 }
 
 async function showActionOnce(tabId, a) {
@@ -820,6 +821,7 @@ async function showActionOnce(tabId, a) {
         else el.click();
         return { ok: true, did: "clicked (script)", name };
       }
+      window.__handleShowTarget = el; // re-measured after the glide, before the real click
       // the coming real click is ours: the override watcher ignores input until then
       if (a.click) window.__handleShowOwnUntil = Date.now() + (a.paste || a.clear ? 5000 : 2500);
       return { ok: true, did: a.click ? "clicked" : "showed", name, cx, cy, iw, ih };
@@ -841,6 +843,30 @@ async function showActionOnce(tabId, a) {
     const z = await chrome.tabs.getZoom(tabId).catch(() => 1);
     out.x = win.left + (win.width - out.iw * z) + out.cx * z;
     out.y = win.top + (win.height - out.ih * z) + out.cy * z;
+    // a click glides first, then checks what is under the point before pressing: the page can
+    // move during the glide (a late load shifted a "Child Topics" tab and the click hit "Delete")
+    if (a.click && !a.paste && !a.clear) {
+      await fetch("http://127.0.0.1:4911/move", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x: out.x, y: out.y }) }).catch(() => {});
+      const [chk] = await chrome.scripting.executeScript({
+        target: { tabId }, args: [a, out.cx, out.cy],
+        func: (a, cx, cy) => {
+          // the target found before the glide: still where the cursor is now?
+          const el = window.__handleShowTarget;
+          if (!el || !el.isConnected) return { ok: false, what: "target gone" };
+          const r0 = el.getBoundingClientRect();
+          let ox = 0, oy = 0;
+          for (let w = el.ownerDocument.defaultView; w && w.frameElement; w = w.parent) {
+            const fr = w.frameElement.getBoundingClientRect(); ox += fr.left; oy += fr.top;
+          }
+          const px = Math.min(r0.width / 2, 60), py = r0.height / 2;
+          const dx = r0.left + ox + px - cx, dy = r0.top + oy + py - cy;
+          return { ok: Math.abs(dx) < 4 && Math.abs(dy) < 4, what: `target moved ${Math.round(dx)},${Math.round(dy)}px` };
+        },
+      }).catch((e) => [{ result: { ok: false, what: String(e) } }]);
+      if (!chk.result.ok) return { moved: true, error: `page moved during the glide (${chk.result.what}); not clicking` };
+      await chrome.scripting.executeScript({ target: { tabId }, func: () => { window.__handleShowOwnUntil = Date.now() + 2500; } }).catch(() => {});
+    }
     // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
     const m = await fetch("http://127.0.0.1:4911/move", {
       method: "POST", headers: { "Content-Type": "application/json" },

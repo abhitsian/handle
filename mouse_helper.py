@@ -25,6 +25,7 @@ def _pos():
 
 def _post(kind, x, y):
     e = Quartz.CGEventCreateMouseEvent(None, kind, (x, y), Quartz.kCGMouseButtonLeft)
+    Quartz.CGEventSetFlags(e, 0)  # no modifiers: a stray Command flag turns a click into "open in new tab"
     if kind in (Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp):
         Quartz.CGEventSetIntegerValueField(e, Quartz.kCGMouseEventClickState, 1)  # a single click, as macOS sends it
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
@@ -48,13 +49,25 @@ def click(x, y):
     _post(Quartz.kCGEventLeftMouseUp, x, y)
 
 
+KEY_CMD = 55
+
+
+def _key_event(code, down, flags):
+    e = Quartz.CGEventCreateKeyboardEvent(None, code, down)
+    Quartz.CGEventSetFlags(e, flags)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
+    time.sleep(0.03)
+
+
 def key(code, cmd=False):
-    for down in (True, False):
-        e = Quartz.CGEventCreateKeyboardEvent(None, code, down)
-        if cmd:
-            Quartz.CGEventSetFlags(e, Quartz.kCGEventFlagMaskCommand)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
-        time.sleep(0.03)
+    # press and release Command as a real key, so the system never thinks it is still held
+    cmdf = Quartz.kCGEventFlagMaskCommand if cmd else 0
+    if cmd:
+        _key_event(KEY_CMD, True, cmdf)
+    _key_event(code, True, cmdf)
+    _key_event(code, False, cmdf)
+    if cmd:
+        _key_event(KEY_CMD, False, 0)
 
 
 KEY_A, KEY_V, KEY_DELETE = 0, 9, 51
