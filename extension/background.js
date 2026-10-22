@@ -628,6 +628,63 @@ async function openGroupedWindow(groups, ungrouped) {
   return { window_id: w.id, groups: made };
 }
 
+// Run: a fixed sequence of steps (a slide image or the nth tab of a named group),
+// stepped with the run-next / run-prev keyboard commands. Slides are images in
+// deck/ (gitignored) shown by deck/deck.html#N in the run's window.
+const DECK_URL = chrome.runtime.getURL("deck/deck.html");
+
+async function runSet(steps, windowId) {
+  if (!steps || !steps.length) return { error: "no steps" };
+  // The run's window is the one holding its first named group, else the focused one.
+  const firstGroup = steps.find((s) => s.group);
+  const [g] = firstGroup ? await chrome.tabGroups.query({ title: firstGroup.group }) : [];
+  const win = windowId || g?.windowId || (await chrome.windows.getLastFocused()).id;
+  await chrome.storage.local.set({ run: { steps, windowId: win, i: -1 } });
+  await chrome.action?.setBadgeText?.({ text: "" });
+  return { ok: true, steps: steps.length, window_id: win };
+}
+
+async function runTarget(step, windowId) {
+  if (step.slide) {
+    const url = `${DECK_URL}#${step.slide}`;
+    const [deck] = await chrome.tabs.query({ windowId, url: DECK_URL + "*" });
+    if (deck) return (await chrome.tabs.update(deck.id, { url, active: true })).id;
+    return (await chrome.tabs.create({ windowId, url, active: true })).id;
+  }
+  const [group] = await chrome.tabGroups.query({ windowId, title: step.group });
+  if (!group) throw new Error(`no tab group "${step.group}" in the run window`);
+  const tabs = (await chrome.tabs.query({ groupId: group.id })).sort((a, b) => a.index - b.index);
+  const tab = tabs[step.n || 0];
+  if (!tab) throw new Error(`group "${step.group}" has no tab ${step.n || 0}`);
+  if (group.collapsed) await chrome.tabGroups.update(group.id, { collapsed: false });
+  await chrome.tabs.update(tab.id, { active: true });
+  return tab.id;
+}
+
+async function runGo({ delta, index }) {
+  const { run } = await chrome.storage.local.get("run");
+  if (!run) return { error: "no run set" };
+  const i = index !== undefined ? index : Math.min(Math.max(run.i + delta, 0), run.steps.length - 1);
+  const step = run.steps[i];
+  const tabId = await runTarget(step, run.windowId);
+  await chrome.windows.update(run.windowId, { focused: true });
+  run.i = i;
+  await chrome.storage.local.set({ run });
+  await chrome.action?.setBadgeText?.({ text: `${i + 1}` });
+  return { i, of: run.steps.length, step, tab_id: tabId };
+}
+
+async function runStatus() {
+  const { run } = await chrome.storage.local.get("run");
+  const shortcuts = (await chrome.commands.getAll()).map((c) => ({ name: c.name, shortcut: c.shortcut }));
+  return { run, shortcuts };
+}
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "run-next") runGo({ delta: 1 }).catch((e) => console.warn("run", e));
+  if (command === "run-prev") runGo({ delta: -1 }).catch((e) => console.warn("run", e));
+});
+
 async function dispatch(cmd) {
   const { method, params = {} } = cmd;
   const tabId = params.tab_id;
@@ -645,6 +702,9 @@ async function dispatch(cmd) {
     case "record_stop": return await stopRecording();
     case "move": return await moveTabs(params.tab_ids, params.window_id);
     case "window": return await openGroupedWindow(params.groups, params.ungrouped);
+    case "run_set": return await runSet(params.steps, params.window_id);
+    case "run_go": return await runGo(params);
+    case "run_status": return await runStatus();
     case "reload_ext": setTimeout(() => chrome.runtime.reload(), 200); return { reloading: true };
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };

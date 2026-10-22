@@ -3,8 +3,39 @@
   "name": "Handle",
   "version": "1.7.0",
   "description": "Gives Handle a sturdier view of your open Chrome tabs — native tab groups, race-free screenshots, console errors — and passively indexes the pages you actually read so you can search them later. Connects only to Handle's local server (127.0.0.1:4910). Nothing leaves your machine.",
-  "background": { "service_worker": "background.js" },
-  "permissions": ["tabs", "tabGroups", "scripting", "debugger", "alarms", "storage"],
-  "host_permissions": ["http://127.0.0.1:4910/*", "<all_urls>"],
-  "minimum_chrome_version": "116"
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "debugger",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:4910/*",
+    "<all_urls>"
+  ],
+  "minimum_chrome_version": "116",
+  "commands": {
+    "run-next": {
+      "suggested_key": {
+        "default": "Alt+Shift+Right",
+        "mac": "Alt+Shift+Right"
+      },
+      "description": "Run: next step (slide or tab)"
+    },
+    "run-prev": {
+      "suggested_key": {
+        "default": "Alt+Shift+Left",
+        "mac": "Alt+Shift+Left"
+      },
+      "description": "Run: previous step"
+    }
+  },
+  "action": {
+    "default_title": "Handle"
+  }
 }
