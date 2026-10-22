@@ -769,6 +769,8 @@ async function showAction(tabId, a) {
         const within = (x, y) => { for (let n = x; n; n = n.parentElement || (n.getRootNode && n.getRootNode().host)) if (n === y) return true; return false; };
         if (!hit || !(within(hit, el) || within(el, hit))) return { error: `"${name}" is covered at its position; not clicking` };
       }
+      // the coming real click is ours: the override watcher ignores input until then
+      if (a.click) window.__handleShowOwnUntil = Date.now() + 2500;
       return { ok: true, did: a.click ? "clicked" : "showed", name, x: sx, y: sy };
     },
   });
@@ -815,7 +817,7 @@ async function watchOverride(tabId) {
       if (window.__handleShowWatch) return;
       window.__handleShowWatch = true;
       const stop = (e) => {
-        if (!e.isTrusted || e.altKey) return;
+        if (!e.isTrusted || e.altKey || Date.now() < (window.__handleShowOwnUntil || 0)) return;
         chrome.runtime.sendMessage({ type: "show-override" });
       };
       for (const t of ["pointerdown", "wheel", "touchstart"]) addEventListener(t, stop, { capture: true, passive: true });
