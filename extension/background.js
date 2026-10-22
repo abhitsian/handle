@@ -702,7 +702,8 @@ async function showAction(tabId, a) {
     const out = await showActionOnce(tabId, a);
     if (!out || !out.offscreen) return out;
     const win = await chrome.windows.get((await chrome.tabs.get(tabId)).windowId);
-    const x = win.left + (win.width - out.iw) + out.cx, y = win.top + (win.height - out.ih) + out.ih / 2;
+    const z = await chrome.tabs.getZoom(tabId).catch(() => 1); // page px are CSS px: scale by the tab's zoom
+    const x = win.left + (win.width - out.iw * z) + out.cx * z, y = win.top + (win.height - out.ih * z) + out.ih * z / 2;
     await fetch("http://127.0.0.1:4911/move", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ x, y, scroll: 4 * out.offscreen }) }).catch(() => {});
     await new Promise((r) => setTimeout(r, 450));
@@ -831,8 +832,15 @@ async function showActionOnce(tabId, a) {
     // keystrokes go to the focused app: bring the demo window forward first
     // a click or keystroke into a window in the background is spent focusing it: bring it forward first
     if ((a.click || a.paste || a.clear) && !win.focused) { await chrome.windows.update(win.id, { focused: true }); await new Promise((r) => setTimeout(r, 250)); }
-    out.x = win.left + (win.width - out.iw) + out.cx;
-    out.y = win.top + (win.height - out.ih) + out.cy;
+    // focusing can take a second or more: mark the coming input as ours from now, so it does not read as an override
+    if (a.click || a.paste || a.clear) {
+      await chrome.scripting.executeScript({ target: { tabId }, args: [a.paste || a.clear ? 5000 : 2500],
+        func: (ms) => { window.__handleShowOwnUntil = Date.now() + ms; } }).catch(() => {});
+    }
+    // page px are CSS px: scale by the tab's zoom (a flow can set zoom to fit a long form)
+    const z = await chrome.tabs.getZoom(tabId).catch(() => 1);
+    out.x = win.left + (win.width - out.iw * z) + out.cx * z;
+    out.y = win.top + (win.height - out.ih * z) + out.cy * z;
     // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
     const m = await fetch("http://127.0.0.1:4911/move", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -980,6 +988,8 @@ async function showPlay(src = "bridge") {
   const prev = showRuns[c.tab.id];
   if (prev?.playing) { prev.skip = true; return { skipped: true }; } // play while playing: next step now
   const run = (showRuns[c.tab.id] = { playing: true });
+  // a flow can set the page zoom so every target fits in the window (e.g. tall editors)
+  if (c.script.zoom) await chrome.tabs.setZoom(c.tab.id, c.script.zoom).catch(() => {});
   const n = c.script.steps.length;
   await watchOverride(c.tab.id);
   while (run.playing && c.st.i < n) {
