@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Autopilot</title>
+<style>
+:root{--bg:#111316;--card:#1a1d21;--line:#2a2e34;--fg:#e9ecef;--mut:#8b939c;--go:#2ea043;--pause:#d29922;--err:#f85149;--acc:#58a6ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,system-ui,sans-serif;user-select:none}
+.wrap{padding:12px;display:grid;gap:10px}
+.state{display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;background:var(--card);border:1px solid var(--line)}
+.pill{font:700 12px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;padding:7px 10px;border-radius:999px;background:#333;color:#fff;min-width:86px;text-align:center}
+.pill.playing{background:var(--go)}.pill.paused,.pill.ready{background:var(--pause);color:#111}.pill.error{background:var(--err)}.pill.done{background:#57606a}.pill.none{background:#333;color:var(--mut)}
+.where{flex:1;min-width:0}.where b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.where span{color:var(--mut);font-size:12px}
+.now{padding:10px 12px;border-radius:10px;background:var(--card);border:1px solid var(--line)}
+.now .k{color:var(--mut);font-size:12px}.now .t{font-size:15px;font-weight:600;margin-top:2px}
+.bar{height:4px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden}.bar i{display:block;height:100%;width:0;background:var(--acc)}
+.err{color:var(--err);font-size:12px;margin-top:6px}
+.ctl{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 0;font-size:13px;cursor:pointer}
+button:hover{border-color:var(--acc)}button.big{background:var(--go);border-color:var(--go);font-weight:700}button.big.pause{background:var(--pause);border-color:var(--pause);color:#111}
+.tabs2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+h4{margin:6px 0 0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+ol{margin:0;padding:0;list-style:none;display:grid;gap:3px}
+li{padding:7px 9px;border-radius:7px;background:var(--card);border:1px solid transparent;cursor:pointer;display:flex;gap:8px}
+li .n{color:var(--mut);font:12px ui-monospace,Menlo,monospace;min-width:18px}
+li.done{color:var(--mut)}li.cur{border-color:var(--acc);background:#16263a}li:hover{border-color:var(--line)}
+li.tab .g{color:var(--mut);font-size:11px;margin-left:auto;white-space:nowrap}li.tab.noflow{opacity:.55}li.tab.active{border-color:var(--acc)}
+.keys{color:var(--mut);font-size:11px}
+</style></head><body><div class="wrap">
+<div class="state"><div class="pill" id="pill">—</div><div class="where"><b id="title">—</b><span id="group"></span></div></div>
+<div class="now"><div class="k" id="k">—</div><div class="t" id="t">Open a demo tab</div><div class="bar"><i id="bar"></i></div><div class="err" id="err"></div></div>
+<div class="ctl">
+<button id="prev" title="Back one step (moves position, runs nothing)">⏮ Back</button>
+<button id="play" class="big">▶ Play</button>
+<button id="next" title="Run the next step now">⏭ Next</button>
+<button id="stop" title="Stop and reset this page">⏹ Reset</button>
+</div>
+<div class="tabs2"><button id="tprev">◀ Previous tab</button><button id="tnext">Next tab ▶</button></div>
+<h4>Steps on this page · click to jump</h4><ol id="steps"></ol>
+<h4>Tabs · click to switch</h4><ol id="tabs"></ol>
+<div class="keys">Keys in Chrome: ⌥↓ play / skip ahead · ⌥↑ pause, again to reset · ⌥← ⌥→ tabs. Here: Space play/pause · → next · ← back · R reset · [ ] tabs.</div>
+</div><script src="panel.js"></script></body></html>

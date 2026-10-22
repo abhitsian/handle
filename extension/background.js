@@ -791,24 +791,63 @@ async function showAction(tabId, a) {
 // pause() stops after the current step; pause() while paused resets the page.
 // A real click, scroll or keypress by the presenter on the page pauses it, and a
 // A `manual` step points at the element and pauses for the presenter to act.
-const showRuns = {}; // tabId -> { playing }
+const showRuns = {}; // tabId -> { playing, skip, error, dwellEnd }
+
+// The presentation window is the one holding the first named group in the shows,
+// so keys and the panel act on the demo window even when focus is elsewhere.
+async function presentationWindow() {
+  const { shows = [] } = await chrome.storage.local.get("shows");
+  const g = shows.find((s) => s.group)?.group;
+  if (g) { const [grp] = await chrome.tabGroups.query({ title: g }); if (grp) return grp.windowId; }
+  return (await chrome.windows.getLastFocused({ windowTypes: ["normal"] })).id;
+}
 
 async function showCtx() {
-  const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
-  const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
-  if (!tab) return {};
+  const winId = await presentationWindow();
+  const [tab] = await chrome.tabs.query({ active: true, windowId: winId });
+  if (!tab) return { winId };
   const { shows = [] } = await chrome.storage.local.get("shows");
   const key = `show-${tab.id}`;
   const st = (await chrome.storage.session.get(key))[key] || { i: 0, start: tab.url };
   const group = tab.groupId !== -1 ? (await chrome.tabGroups.get(tab.groupId)).title : "";
   const script = shows.find((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st.start));
-  return { tab, key, st, script, group };
+  return { tab, key, st, script, group, winId };
 }
 
 const badge = (tabId, text, color) => {
   chrome.action.setBadgeText({ text, tabId });
   if (color) chrome.action.setBadgeBackgroundColor({ color, tabId });
 };
+
+const stepLabel = (s) => `${s.click ? "Click" : "Point at"} “${s.text}”`;
+
+// Publish what the panel shows: current page, its steps, position and state.
+async function publish() {
+  const c = await showCtx();
+  const state = { at: Date.now(), tabs: [] };
+  if (c.winId) {
+    const { shows = [] } = await chrome.storage.local.get("shows");
+    const groups = {};
+    for (const g of await chrome.tabGroups.query({ windowId: c.winId })) groups[g.id] = g.title;
+    for (const t of (await chrome.tabs.query({ windowId: c.winId })).sort((a, b) => a.index - b.index)) {
+      const group = groups[t.groupId] || "";
+      const st = (await chrome.storage.session.get(`show-${t.id}`))[`show-${t.id}`];
+      const has = shows.some((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st?.start || t.url));
+      state.tabs.push({ id: t.id, title: t.title, group, active: t.active, flow: has });
+    }
+  }
+  if (c.tab) {
+    const run = showRuns[c.tab.id] || {};
+    const n = c.script ? c.script.steps.length : 0;
+    Object.assign(state, {
+      tabId: c.tab.id, title: c.tab.title, group: c.group, flow: !!c.script,
+      steps: c.script ? c.script.steps.map(stepLabel) : [], i: c.st.i, n,
+      status: !c.script ? "none" : run.playing ? "playing" : run.error ? "error" : c.st.i >= n ? "done" : c.st.i > 0 ? "paused" : "ready",
+      error: run.error || "", dwellEnd: run.playing ? run.dwellEnd || 0 : 0, dwellMs: run.dwellMs || 0,
+    });
+  }
+  await chrome.storage.session.set({ panel: state });
+}
 
 async function watchOverride(tabId) {
   await chrome.scripting.executeScript({
@@ -826,54 +865,145 @@ async function watchOverride(tabId) {
   }).catch(() => {});
 }
 
-async function showPlay() {
-  const { tab, key, st, script } = await showCtx();
-  if (!tab) return { error: "no active tab" };
-  if (!script) { badge(tab.id, "?", "#888"); return { error: "no show for this page" }; }
-  if (showRuns[tab.id]?.playing) { showRuns[tab.id].skip = true; return { skipped: true }; } // ⌥↓ while playing: next step now
-  const run = (showRuns[tab.id] = { playing: true });
-  const n = script.steps.length;
-  await watchOverride(tab.id);
-  badge(tab.id, `▶${st.i + 1}`, "#1a7f37");
-  while (run.playing && st.i < n) {
-    const step = script.steps[st.i];
-    const out = await showAction(tab.id, step).catch((e) => ({ error: String(e) }));
-    if (!out || !out.ok) { run.playing = false; badge(tab.id, "!", "#d1242f"); return { at: st.i, out }; }
-    st.i += 1;
-    await chrome.storage.session.set({ [key]: st });
-    if (step.manual) { run.playing = false; badge(tab.id, "you", "#bf8700"); return { at: st.i, manual: step.text }; }
-    await watchOverride(tab.id); // a click may have loaded a new page
-    run.skip = false;
-    for (let t = 0; t < (step.dwell || 3) * 1000 && run.playing && !run.skip; t += 100) await new Promise((r) => setTimeout(r, 100));
-    if (run.playing) badge(tab.id, st.i < n ? `▶${st.i + 1}` : "end", "#1a7f37");
+// Run one step at the current position; returns false if it failed.
+async function showRunOne(c, run) {
+  const step = c.script.steps[c.st.i];
+  const out = await showAction(c.tab.id, step).catch((e) => ({ error: String(e) }));
+  if (!out || !out.ok) {
+    run.playing = false; run.error = (out && out.error) || "step failed";
+    badge(c.tab.id, "!", "#d1242f"); await publish(); return false;
   }
-  if (st.i >= n) { run.playing = false; badge(tab.id, "end", "#57606a"); }
-  return { at: st.i, of: n };
+  run.error = "";
+  c.st.i += 1;
+  await chrome.storage.session.set({ [c.key]: c.st });
+  await watchOverride(c.tab.id); // a click may have loaded a new page
+  return true;
 }
 
-async function showPause() {
-  const { tab, key, st } = await showCtx();
-  if (!tab) return {};
-  const run = showRuns[tab.id];
-  if (run?.playing) { run.playing = false; badge(tab.id, "II", "#bf8700"); return { paused: st.i }; }
-  // already paused: reset this page to its first step and its starting URL
-  await chrome.storage.session.set({ [key]: { i: 0, start: st.start } });
-  if (tab.url !== st.start) await chrome.tabs.update(tab.id, { url: st.start });
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.querySelectorAll("[data-handle-show]").forEach((r) => r.remove()) }).catch(() => {});
-  badge(tab.id, "", null);
+async function showPlay() {
+  const c = await showCtx();
+  if (!c.tab) return { error: "no active tab" };
+  if (!c.script) { badge(c.tab.id, "?", "#888"); await publish(); return { error: "no show for this page" }; }
+  const prev = showRuns[c.tab.id];
+  if (prev?.playing) { prev.skip = true; return { skipped: true }; } // play while playing: next step now
+  const run = (showRuns[c.tab.id] = { playing: true });
+  const n = c.script.steps.length;
+  await watchOverride(c.tab.id);
+  while (run.playing && c.st.i < n) {
+    badge(c.tab.id, `▶${c.st.i + 1}`, "#1a7f37");
+    await publish();
+    const step = c.script.steps[c.st.i];
+    if (!(await showRunOne(c, run))) return { error: run.error };
+    if (step.manual) { run.playing = false; break; }
+    run.skip = false;
+    run.dwellMs = (step.dwell || 3) * 1000; run.dwellEnd = Date.now() + run.dwellMs;
+    await publish();
+    while (Date.now() < run.dwellEnd && run.playing && !run.skip) await new Promise((r) => setTimeout(r, 100));
+  }
+  run.playing = false;
+  badge(c.tab.id, c.st.i >= n ? "end" : "II", c.st.i >= n ? "#57606a" : "#bf8700");
+  await publish();
+  return { at: c.st.i, of: n };
+}
+
+async function showPauseOnly() {
+  const c = await showCtx();
+  const run = c.tab && showRuns[c.tab.id];
+  if (run?.playing) { run.playing = false; badge(c.tab.id, "II", "#bf8700"); }
+  await publish();
+}
+
+async function showReset() {
+  const c = await showCtx();
+  if (!c.tab) return {};
+  const run = showRuns[c.tab.id];
+  if (run) { run.playing = false; run.error = ""; }
+  await chrome.storage.session.set({ [c.key]: { i: 0, start: c.st.start } });
+  if (c.tab.url !== c.st.start) await chrome.tabs.update(c.tab.id, { url: c.st.start });
+  badge(c.tab.id, "", null);
+  await publish();
   return { reset: true };
 }
 
-chrome.runtime.onMessage.addListener((msg, sender) => {
+// ⌥↑: pause; when already paused, reset the page
+async function showPause() {
+  const c = await showCtx();
+  if (c.tab && showRuns[c.tab.id]?.playing) return showPauseOnly();
+  return showReset();
+}
+
+// Next: while playing, skip the wait; while paused, run the current step once.
+async function showNextStep() {
+  const c = await showCtx();
+  if (!c.tab || !c.script) return;
+  const run = showRuns[c.tab.id] || (showRuns[c.tab.id] = {});
+  if (run.playing) { run.skip = true; return; }
+  if (c.st.i >= c.script.steps.length) return;
+  await watchOverride(c.tab.id);
+  await showRunOne(c, run);
+  badge(c.tab.id, "II", "#bf8700");
+  await publish();
+}
+
+// Move the position without running anything; Play or Next runs from there.
+async function showSetPosition(i) {
+  const c = await showCtx();
+  if (!c.tab || !c.script) return;
+  const run = showRuns[c.tab.id] || (showRuns[c.tab.id] = {});
+  run.playing = false; run.error = "";
+  c.st.i = Math.max(0, Math.min(i, c.script.steps.length));
+  await chrome.storage.session.set({ [c.key]: c.st });
+  badge(c.tab.id, "II", "#bf8700");
+  await publish();
+}
+
+async function showTab(delta, tabId) {
+  const winId = await presentationWindow();
+  if (tabId) await chrome.tabs.update(tabId, { active: true });
+  else {
+    const [cur] = await chrome.tabs.query({ active: true, windowId: winId });
+    const [next] = cur ? await chrome.tabs.query({ windowId: winId, index: cur.index + delta }) : [];
+    if (next) {
+      if (next.groupId !== -1) await chrome.tabGroups.update(next.groupId, { collapsed: false });
+      await chrome.tabs.update(next.id, { active: true });
+    }
+  }
+  await publish();
+}
+
+async function openPanel() {
+  const url = chrome.runtime.getURL("panel/panel.html");
+  const [open] = await chrome.tabs.query({ url });
+  if (open) { await chrome.windows.update(open.windowId, { focused: true }); return { window_id: open.windowId }; }
+  const w = await chrome.windows.create({ url, type: "popup", width: 400, height: 780, left: 1500, top: 60 });
+  return { window_id: w.id };
+}
+
+chrome.action.onClicked.addListener(() => openPanel());
+
+chrome.tabs.onActivated.addListener(() => publish().catch(() => {}));
+chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete") publish().catch(() => {}); });
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.type === "show-override" && sender.tab && showRuns[sender.tab.id]?.playing) {
     showRuns[sender.tab.id].playing = false;
     badge(sender.tab.id, "II", "#bf8700");
+    publish();
   }
+  const p = msg?.panel;
+  if (!p) return;
+  const act = {
+    play: () => showPlay(), pause: () => showPauseOnly(), stop: () => showReset(),
+    next: () => showNextStep(), prev: async () => { const c = await showCtx(); return showSetPosition((c.st?.i || 0) - 1); },
+    jump: () => showSetPosition(msg.i), tab: () => showTab(msg.delta, msg.tabId), refresh: () => publish(),
+  }[p];
+  if (act) act().catch((e) => console.warn("panel", e)).finally(() => reply && reply({ ok: true }));
+  return true;
 });
 
 chrome.commands.onCommand.addListener((command) => {
-  if (command === "tab-next") stepTab(1).catch((e) => console.warn("tab", e));
-  if (command === "tab-prev") stepTab(-1).catch((e) => console.warn("tab", e));
+  if (command === "tab-next") showTab(1).catch((e) => console.warn("tab", e));
+  if (command === "tab-prev") showTab(-1).catch((e) => console.warn("tab", e));
   if (command === "show-next") showPlay().catch((e) => console.warn("show", e));
   if (command === "show-reset") showPause().catch((e) => console.warn("show", e));
 });
@@ -901,6 +1031,7 @@ async function dispatch(cmd) {
     case "tab_step": return await stepTab(params.delta || 1);
     case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
+    case "panel_open": return await openPanel();
     case "show_clear": for (const k of Object.keys(showRuns)) showRuns[k].playing = false; await chrome.storage.session.clear(); return { ok: true };
     case "tab_move": return await chrome.tabs.move(params.tab_id, { index: params.index });
     case "show_pause": return await showPause();
