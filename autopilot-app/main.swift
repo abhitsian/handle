@@ -2,7 +2,7 @@
 // It reads the autopilot state and sends controls through Handle's local
 // bridge (127.0.0.1:4910/ext/cmd), so it works whichever app has focus.
 // The window has two panes: the talk track for the current tab (left) and the controls (right).
-// Global hotkeys: ⌃⌥Space play/pause · ⌃⌥→ next step · ⌃⌥← back a step
+// Global hotkeys: ⌥Space or ⌃⌥Space play/pause · ⌃⌥→ next step · ⌃⌥← back a step
 //                 ⌃⌥↓ next tab · ⌃⌥↑ previous tab
 import AppKit
 import Carbon.HIToolbox
@@ -276,7 +276,7 @@ struct Controls: View {
         .frame(width: 380)
     }
 
-    var hotkeyLine: String { "⌃⌥Space play/pause · ⌃⌥→ next · ⌃⌥← back · ⌃⌥↓ ⌃⌥↑ tabs" }
+    var hotkeyLine: String { "⌥Space pause/resume · ⌃⌥Space play/pause · ⌃⌥→ next · ⌃⌥← back · ⌃⌥↓ ⌃⌥↑ tabs" }
 
     func shortTitle(_ t: String?) -> String {
         guard let t else { return "—" }
@@ -301,6 +301,7 @@ final class Hotkeys {
         }, 1, &spec, nil, nil)
         let mods = UInt32(controlKey | optionKey)
         add(1, kVK_Space, mods) { Bridge.send("toggle") }
+        add(6, kVK_Space, UInt32(optionKey)) { Bridge.send("toggle") }  // ⌥Space: pause, press again to resume
         add(2, kVK_RightArrow, mods) { Bridge.send("next") }
         add(3, kVK_LeftArrow, mods) { Bridge.send("prev") }
         add(4, kVK_DownArrow, mods) { Bridge.send("tab", ["delta": 1]) }
