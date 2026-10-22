@@ -705,7 +705,11 @@ async function showAction(tabId, a) {
       const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
       const deep = (root, acc) => {
         let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
-        for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
+        for (const el of kids) {
+          acc.push(el);
+          if (el.shadowRoot) deep(el.shadowRoot, acc);
+          if (el.tagName === "IFRAME") { try { if (el.contentDocument) deep(el.contentDocument, acc); } catch (e) {} } // same-origin frames (classic forms)
+        }
         return acc;
       };
       const own = (e) => { let t = ""; for (const n of e.childNodes) if (n.nodeType === 3) t += n.textContent; return norm(t); };
@@ -884,6 +888,8 @@ async function dispatch(cmd) {
     case "tab_step": return await stepTab(params.delta || 1);
     case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
+    case "show_clear": for (const k of Object.keys(showRuns)) showRuns[k].playing = false; await chrome.storage.session.clear(); return { ok: true };
+    case "tab_move": return await chrome.tabs.move(params.tab_id, { index: params.index });
     case "show_pause": return await showPause();
     case "show_action": return await showAction(tabId, params.action);
     case "reload_ext": setTimeout(() => chrome.runtime.reload(), 200); return { reloading: true };
