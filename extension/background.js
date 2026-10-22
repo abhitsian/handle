@@ -772,7 +772,7 @@ async function showAction(tabId, a) {
         if (!hit || !(within(hit, el) || within(el, hit))) return { error: `"${name}" is covered at its position; not clicking` };
       }
       // the coming real click is ours: the override watcher ignores input until then
-      if (a.click) window.__handleShowOwnUntil = Date.now() + 2500;
+      if (a.click) window.__handleShowOwnUntil = Date.now() + (a.paste || a.clear ? 5000 : 2500);
       return { ok: true, did: a.click ? "clicked" : "showed", name, cx, cy, iw, ih };
     },
   });
@@ -780,14 +780,37 @@ async function showAction(tabId, a) {
   if (out && out.ok && !a.probe) {
     // screen point = window origin + browser chrome (vertical tabs on the left, toolbars on top) + page point
     const win = await chrome.windows.get((await chrome.tabs.get(tabId)).windowId);
+    // keystrokes go to the focused app: bring the demo window forward first
+    if (a.paste || a.clear) { await chrome.windows.update(win.id, { focused: true }); await new Promise((r) => setTimeout(r, 250)); }
     out.x = win.left + (win.width - out.iw) + out.cx;
     out.y = win.top + (win.height - out.ih) + out.cy;
     // the real cursor glides there (and clicks): handled by mouse_helper.py on :4911
     const m = await fetch("http://127.0.0.1:4911/move", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ x: out.x, y: out.y, click: !!a.click }),
+      body: JSON.stringify({ x: out.x, y: out.y, click: !!a.click, paste: a.paste || "", clear: !!a.clear }),
     }).then((x) => x.json()).catch((e) => ({ error: `mouse helper not running: ${e}` }));
     if (m.error) return { error: m.error };
+    if (a.paste || a.clear) {
+      // check the box got the text; if the keystrokes missed, set it the way a paste would
+      const [chk] = await chrome.scripting.executeScript({
+        target: { tabId }, args: [a],
+        func: (a) => {
+          const boxes = [];
+          const walk = (root) => { for (const el of root.querySelectorAll("*")) { if (el.shadowRoot) walk(el.shadowRoot); if (el.tagName === "TEXTAREA" && (el.getAttribute("aria-label") || el.placeholder || "") === a.text) boxes.push(el); } };
+          walk(document);
+          const box = boxes[0];
+          if (!box) return { box: false };
+          const want = a.paste || "";
+          if (box.value === want) return { box: true, typed: "keys" };
+          const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+          box.focus(); set.call(box, want);
+          box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertFromPaste", data: want }));
+          box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          return { box: true, typed: "set" };
+        },
+      });
+      out.typed = chk.result;
+    }
   }
   return out;
 }
@@ -825,7 +848,7 @@ const badge = (tabId, text, color) => {
   if (color) chrome.action.setBadgeBackgroundColor({ color, tabId });
 };
 
-const stepLabel = (s) => `${s.click ? "Click" : "Point at"} “${s.text}”`;
+const stepLabel = (s) => s.paste ? `Paste prompt: “${s.paste.slice(0, 48)}…”` : s.clear ? "Clear the prompt box" : `${s.click ? "Click" : "Point at"} “${s.text}”`;
 
 // Publish what the panel shows: current page, its steps, position and state.
 async function publish() {
@@ -1037,6 +1060,7 @@ async function dispatch(cmd) {
     case "tab_step": return await stepTab(params.delta || 1);
     case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
+    case "show_tab": return await showTab(params.delta || 0, params.tab_id);
     case "panel_open": return await openPanel();
     case "panel_state": await publish(); return (await chrome.storage.session.get("panel")).panel || {};
     case "show_clear": for (const k of Object.keys(showRuns)) showRuns[k].playing = false; await chrome.storage.session.clear(); return { ok: true };

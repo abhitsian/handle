@@ -2,11 +2,13 @@
 
 Runs on 127.0.0.1:4911. POST /move {"x":..,"y":..,"click":bool} glides the
 cursor to screen point (x, y) in global display points, then optionally
-clicks. Must be started from a process with Accessibility permission
+clicks. With "paste": text it then pastes that text (Cmd+V); with "clear": true
+it selects all and deletes (Cmd+A, Delete). It never sends Return. Must be started from a process with Accessibility permission
 (e.g. Terminal): `python3 mouse_helper.py`.
 """
 import json
 import math
+import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -43,6 +45,18 @@ def click(x, y):
     _post(Quartz.kCGEventLeftMouseUp, x, y)
 
 
+def key(code, cmd=False):
+    for down in (True, False):
+        e = Quartz.CGEventCreateKeyboardEvent(None, code, down)
+        if cmd:
+            Quartz.CGEventSetFlags(e, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
+        time.sleep(0.03)
+
+
+KEY_A, KEY_V, KEY_DELETE = 0, 9, 51
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -70,6 +84,14 @@ class H(BaseHTTPRequestHandler):
         if a.get("click"):
             time.sleep(0.12)
             click(x, y)
+        if a.get("paste"):
+            subprocess.run(["pbcopy"], input=a["paste"].encode(), check=True)
+            time.sleep(0.25)
+            key(KEY_V, cmd=True)
+        if a.get("clear"):
+            time.sleep(0.15)
+            key(KEY_A, cmd=True)
+            key(KEY_DELETE)
         self._send(200, {"ok": True, "pos": _pos()})
 
 
