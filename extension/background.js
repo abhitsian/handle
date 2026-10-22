@@ -680,9 +680,19 @@ async function runStatus() {
   return { run, shortcuts };
 }
 
+// Step to the adjacent tab in the focused window; stops at the first and last tab.
+async function stepTab(delta) {
+  const [cur] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!cur) return;
+  const [next] = await chrome.tabs.query({ windowId: cur.windowId, index: cur.index + delta });
+  if (!next) return;
+  if (next.groupId !== -1) await chrome.tabGroups.update(next.groupId, { collapsed: false });
+  await chrome.tabs.update(next.id, { active: true });
+}
+
 chrome.commands.onCommand.addListener((command) => {
-  if (command === "run-next") runGo({ delta: 1 }).catch((e) => console.warn("run", e));
-  if (command === "run-prev") runGo({ delta: -1 }).catch((e) => console.warn("run", e));
+  if (command === "tab-next") stepTab(1).catch((e) => console.warn("tab", e));
+  if (command === "tab-prev") stepTab(-1).catch((e) => console.warn("tab", e));
 });
 
 async function dispatch(cmd) {

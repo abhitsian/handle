@@ -20,19 +20,19 @@
   ],
   "minimum_chrome_version": "116",
   "commands": {
-    "run-next": {
+    "tab-next": {
       "suggested_key": {
-        "default": "Alt+Shift+Right",
-        "mac": "Alt+Shift+Right"
+        "default": "Alt+Right",
+        "mac": "Alt+Right"
       },
-      "description": "Run: next step (slide or tab)"
+      "description": "Next tab in this window"
     },
-    "run-prev": {
+    "tab-prev": {
       "suggested_key": {
-        "default": "Alt+Shift+Left",
-        "mac": "Alt+Shift+Left"
+        "default": "Alt+Left",
+        "mac": "Alt+Left"
       },
-      "description": "Run: previous step"
+      "description": "Previous tab in this window"
     }
   },
   "action": {
