@@ -692,9 +692,170 @@ async function stepTab(delta) {
   return { window_id: win.id, from: cur.index, to: next.index };
 }
 
+// Show: per-page demo actions. Each press of show-next runs the next action on the
+// active tab: scroll an element into view and ring it, or ring it and click it.
+// Scripts live in chrome.storage.local "shows" (set over the bridge), matched by
+// tab group title and the URL the tab had on its first press.
+async function showAction(tabId, a) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    args: [a],
+    func: async (a) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const deep = (root, acc) => {
+        let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
+        for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
+        return acc;
+      };
+      const own = (e) => { let t = ""; for (const n of e.childNodes) if (n.nodeType === 3) t += n.textContent; return norm(t); };
+      const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const ROLES = ["button", "link", "tab", "option", "menuitem"];
+      const clickable = (e) => /^(BUTTON|A)$/.test(e.tagName) || (e.getAttribute && ROLES.includes(e.getAttribute("role")));
+      const label = (e) => own(e) || norm(e.getAttribute && e.getAttribute("aria-label")) || (a.click ? norm(e.innerText) : "");
+      const area = (e) => { const r = e.getBoundingClientRect(); return r.width * r.height; };
+      const find = () => {
+        for (const t of [a.text, ...(a.alts || [])]) { const e = findOne(norm(t)); if (e) return e; }
+        return null;
+      };
+      const findOne = (q) => {
+        const vis = deep(document, []).filter(visible);
+        // clicks prefer real controls, then fall back to any element with the text
+        // (some nav items are plain divs with click handlers)
+        for (const all of a.click ? [vis.filter(clickable), vis] : [vis]) {
+          for (const test of [(t) => t === q, (t) => t.startsWith(q), (t) => t.includes(q)]) {
+            const hits = all.filter((e) => test(label(e)));
+            if (hits.length) return hits.sort((x, y) => area(x) - area(y))[a.nth || 0] || hits[0];
+          }
+        }
+        return null;
+      };
+      let el = null;
+      const deadline = Date.now() + (a.wait || 8000);
+      while (!(el = find()) && Date.now() < deadline) await sleep(300);
+      if (!el) return { error: `not found: ${a.text}` };
+      if (a.probe) return { ok: true, did: "found", name: label(el).slice(0, 60) };
+      for (let k = 0; k < (a.up || 0); k++) el = el.parentElement || (el.getRootNode() && el.getRootNode().host) || el;
+      const name = label(el).slice(0, 60);
+      if (a.click && /\b(save|publish|reset|delete|remove|clone|approve|reject|submit|update|create new theme)\b/.test(name))
+        return { error: `refused to click "${name}"` };
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      await sleep(700);
+      const r = el.getBoundingClientRect();
+      const ring = document.createElement("div");
+      Object.assign(ring.style, {
+        position: "fixed", left: `${r.left - 6}px`, top: `${r.top - 6}px`, width: `${r.width + 12}px`, height: `${r.height + 12}px`,
+        border: "3px solid #ff3b30", borderRadius: "10px", boxShadow: "0 0 0 4px rgba(255,59,48,.25)",
+        zIndex: 2147483647, pointerEvents: "none", transition: "opacity .4s",
+      });
+      document.documentElement.appendChild(ring);
+      ring.dataset.handleShow = "1";
+      if (!a.manual) setTimeout(() => { ring.style.opacity = "0"; setTimeout(() => ring.remove(), 450); }, a.hold || (a.click ? 900 : 2600));
+      if (a.click) {
+        await sleep(600);
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const o = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, view: window };
+        el.dispatchEvent(new PointerEvent("pointerdown", { ...o, pointerType: "mouse", isPrimary: true }));
+        el.dispatchEvent(new MouseEvent("mousedown", o));
+        el.dispatchEvent(new PointerEvent("pointerup", { ...o, pointerType: "mouse", isPrimary: true }));
+        el.dispatchEvent(new MouseEvent("mouseup", o));
+        el.dispatchEvent(new MouseEvent("click", o));
+      }
+      return { ok: true, did: a.click ? "clicked" : "showed", name };
+    },
+  });
+  return res.result;
+}
+
+// Autopilot over a page's show script. play() runs the remaining steps, waiting
+// each step's `dwell` seconds (time to say the matching talk-track lines).
+// pause() stops after the current step; pause() while paused resets the page.
+// A real click, scroll or keypress by the presenter on the page pauses it, and a
+// `manual` step rings the element and pauses for the presenter to act.
+const showRuns = {}; // tabId -> { playing }
+
+async function showCtx() {
+  const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+  const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
+  if (!tab) return {};
+  const { shows = [] } = await chrome.storage.local.get("shows");
+  const key = `show-${tab.id}`;
+  const st = (await chrome.storage.session.get(key))[key] || { i: 0, start: tab.url };
+  const group = tab.groupId !== -1 ? (await chrome.tabGroups.get(tab.groupId)).title : "";
+  const script = shows.find((x) => (!x.group || x.group === group) && new RegExp(x.url).test(st.start));
+  return { tab, key, st, script, group };
+}
+
+const badge = (tabId, text, color) => {
+  chrome.action.setBadgeText({ text, tabId });
+  if (color) chrome.action.setBadgeBackgroundColor({ color, tabId });
+};
+
+async function watchOverride(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (window.__handleShowWatch) return;
+      window.__handleShowWatch = true;
+      const stop = (e) => {
+        if (!e.isTrusted || e.altKey) return;
+        chrome.runtime.sendMessage({ type: "show-override" });
+      };
+      for (const t of ["pointerdown", "wheel", "touchstart"]) addEventListener(t, stop, { capture: true, passive: true });
+      addEventListener("keydown", stop, { capture: true });
+    },
+  }).catch(() => {});
+}
+
+async function showPlay() {
+  const { tab, key, st, script } = await showCtx();
+  if (!tab) return { error: "no active tab" };
+  if (!script) { badge(tab.id, "?", "#888"); return { error: "no show for this page" }; }
+  if (showRuns[tab.id]?.playing) return { playing: true };
+  const run = (showRuns[tab.id] = { playing: true });
+  const n = script.steps.length;
+  await watchOverride(tab.id);
+  badge(tab.id, `▶${st.i + 1}`, "#1a7f37");
+  while (run.playing && st.i < n) {
+    const step = script.steps[st.i];
+    const out = await showAction(tab.id, step).catch((e) => ({ error: String(e) }));
+    if (!out || !out.ok) { run.playing = false; badge(tab.id, "!", "#d1242f"); return { at: st.i, out }; }
+    st.i += 1;
+    await chrome.storage.session.set({ [key]: st });
+    if (step.manual) { run.playing = false; badge(tab.id, "you", "#bf8700"); return { at: st.i, manual: step.text }; }
+    await watchOverride(tab.id); // a click may have loaded a new page
+    for (let t = 0; t < (step.dwell || 3) * 1000 && run.playing; t += 200) await new Promise((r) => setTimeout(r, 200));
+    if (run.playing) badge(tab.id, st.i < n ? `▶${st.i + 1}` : "end", "#1a7f37");
+  }
+  if (st.i >= n) { run.playing = false; badge(tab.id, "end", "#57606a"); }
+  return { at: st.i, of: n };
+}
+
+async function showPause() {
+  const { tab, key, st } = await showCtx();
+  if (!tab) return {};
+  const run = showRuns[tab.id];
+  if (run?.playing) { run.playing = false; badge(tab.id, "II", "#bf8700"); return { paused: st.i }; }
+  // already paused: reset this page to its first step and its starting URL
+  await chrome.storage.session.set({ [key]: { i: 0, start: st.start } });
+  if (tab.url !== st.start) await chrome.tabs.update(tab.id, { url: st.start });
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.querySelectorAll("[data-handle-show]").forEach((r) => r.remove()) }).catch(() => {});
+  badge(tab.id, "", null);
+  return { reset: true };
+}
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type === "show-override" && sender.tab && showRuns[sender.tab.id]?.playing) {
+    showRuns[sender.tab.id].playing = false;
+    badge(sender.tab.id, "II", "#bf8700");
+  }
+});
+
 chrome.commands.onCommand.addListener((command) => {
   if (command === "tab-next") stepTab(1).catch((e) => console.warn("tab", e));
   if (command === "tab-prev") stepTab(-1).catch((e) => console.warn("tab", e));
+  if (command === "show-next") showPlay().catch((e) => console.warn("show", e));
+  if (command === "show-reset") showPause().catch((e) => console.warn("show", e));
 });
 
 async function dispatch(cmd) {
@@ -718,6 +879,10 @@ async function dispatch(cmd) {
     case "run_go": return await runGo(params);
     case "run_status": return await runStatus();
     case "tab_step": return await stepTab(params.delta || 1);
+    case "show_set": await chrome.storage.local.set({ shows: params.shows || [] }); return { ok: true, shows: (params.shows || []).length };
+    case "show_play": return await showPlay();
+    case "show_pause": return await showPause();
+    case "show_action": return await showAction(tabId, params.action);
     case "reload_ext": setTimeout(() => chrome.runtime.reload(), 200); return { reloading: true };
     case "ping": return { pong: true, version: VERSION };
     default: return { error: "unknown method: " + method };

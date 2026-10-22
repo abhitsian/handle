@@ -33,6 +33,20 @@
         "mac": "Alt+Left"
       },
       "description": "Previous tab in this window"
+    },
+    "show-next": {
+      "suggested_key": {
+        "default": "Alt+Down",
+        "mac": "Alt+Down"
+      },
+      "description": "Autopilot: play or resume this page"
+    },
+    "show-reset": {
+      "suggested_key": {
+        "default": "Alt+Up",
+        "mac": "Alt+Up"
+      },
+      "description": "Autopilot: pause; press again to reset this page"
     }
   },
   "action": {
