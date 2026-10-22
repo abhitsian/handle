@@ -35,7 +35,7 @@ enum Bridge {
     static func send(_ action: String, _ extra: [String: Any] = [:]) {
         var p = extra; p["panel"] = action; p["src"] = "app"
         // play runs until the page is done, so give it a long timeout; the state poll shows progress
-        call("panel_msg", p, timeout: ["play", "toggle", "jumpplay"].contains(action) ? 600 : 30)
+        call("panel_msg", p, timeout: ["play", "toggle", "jumpplay"].contains(action) ? 600 : action == "resetall" ? 120 : 30)
     }
 }
 
@@ -230,6 +230,8 @@ struct Controls: View {
                 Button { Bridge.send("tab", ["delta": -1]) } label: { Text("◀ Previous tab").frame(maxWidth: .infinity) }
                 Button { Bridge.send("tab", ["delta": 1]) } label: { Text("Next tab ▶").frame(maxWidth: .infinity) }
             }
+            Button { Bridge.send("resetall") } label: { Text("⟲ Reset all tabs to the start").frame(maxWidth: .infinity) }
+                .help("Every flow tab back to its start page and step 1, then the first tab in front")
 
             Text("STEPS · click to play from there").font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
             ScrollView {

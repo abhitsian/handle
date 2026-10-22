@@ -1069,6 +1069,22 @@ async function showReset() {
   return { reset: true };
 }
 
+// Reset all: every pinned flow tab back to its start URL and step 1, then the first one in front
+async function showResetAll() {
+  for (const r of Object.values(showRuns)) { r.playing = false; r.error = ""; }
+  const { pins = {} } = await chrome.storage.local.get("pins");
+  const winId = await presentationWindow();
+  const tabs = (await chrome.tabs.query({ windowId: winId })).filter((t) => pins[t.id] != null).sort((a, b) => a.index - b.index);
+  for (const t of tabs) {
+    await chrome.tabs.update(t.id, { active: true });
+    await new Promise((r) => setTimeout(r, 300));
+    await showReset();
+  }
+  if (tabs.length) await chrome.tabs.update(tabs[0].id, { active: true });
+  await publish();
+  return { reset: tabs.length };
+}
+
 // ⌥↑: pause; when already paused, reset the page
 async function showPause() {
   const c = await showCtx();
@@ -1145,7 +1161,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 // One entry point for the controls: the extension panel and the Mac app (over the bridge)
 async function panelAct(msg, src) {
   const act = {
-    play: () => showPlay(src), pause: () => showPauseOnly(), stop: () => showReset(),
+    play: () => showPlay(src), pause: () => showPauseOnly(), stop: () => showReset(), resetall: () => showResetAll(),
     toggle: async () => { const c = await showCtx(); return c.tab && showRuns[c.tab.id]?.playing ? showPauseOnly() : showPlay(src); },
     next: () => showNextStep(), prev: async () => { const c = await showCtx(); return showSetPosition((c.st?.i || 0) - 1); },
     jump: () => showSetPosition(msg.i), jumpplay: () => showJumpPlay(msg.i, src), tab: () => showTab(msg.delta, msg.tabId), refresh: () => publish(),
