@@ -11,10 +11,11 @@ import SwiftUI
 // MARK: - Bridge
 
 struct PanelTab: Decodable, Identifiable { let id: Int; let title: String?; let group: String?; let active: Bool?; let flow: Bool? }
+struct SlideInfo: Decodable { let n: Int; let title: String; let image: String }
 struct LastPlay: Decodable { let src: String?; let at: Double? }
 struct PanelState: Decodable {
     let title: String?; let group: String?; let flow: Bool?; let tabId: Int?
-    let steps: [String]?; let says: [String]?; let intro: String?; let i: Int?; let n: Int?
+    let steps: [String]?; let says: [String]?; let notes: [String]?; let slides: [SlideInfo?]?; let intro: String?; let i: Int?; let n: Int?
     let status: String?; let error: String?; let pausedBy: String?
     let dwellEnd: Double?; let dwellMs: Double?
     let tabs: [PanelTab]?; let lastPlay: LastPlay?
@@ -83,11 +84,12 @@ struct TalkTrack: View {
     @ObservedObject var m: Model
 
     // (step it belongs to, text); the tab's opening line belongs before step 1
-    var lines: [(step: Int, text: String)] {
+    var lines: [(step: Int, text: String, note: String)] {
         guard let s = m.state, s.flow == true else { return [] }
-        var out: [(step: Int, text: String)] = []
-        if let t = s.intro, !t.isEmpty { out.append((-1, t)) }
-        for (k, t) in (s.says ?? []).enumerated() where !t.isEmpty { out.append((k, t)) }
+        var out: [(step: Int, text: String, note: String)] = []
+        if let t = s.intro, !t.isEmpty { out.append((-1, t, "")) }
+        let notes = s.notes ?? []
+        for (k, t) in (s.says ?? []).enumerated() where !t.isEmpty { out.append((k, t, notes[safe: k] ?? "")) }
         return out
     }
 
@@ -119,11 +121,15 @@ struct TalkTrack: View {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(Array(ls.enumerated()), id: \.offset) { k, l in
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(l.step < 0 ? "Before you press Play" : "Step \(l.step + 1) · \(s?.steps?[safe: l.step] ?? "")")
+                                    Text(l.step < 0 ? "Before you press Play" : ((s?.slides ?? [])[safe: l.step] ?? nil) != nil ? (s?.steps?[safe: l.step] ?? "") : "Step \(l.step + 1) · \(s?.steps?[safe: l.step] ?? "")")
                                         .font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary).lineLimit(1)
                                     Text(l.text).font(.system(size: k == cur ? 18 : 15, weight: k == cur ? .medium : .regular))
                                         .fixedSize(horizontal: false, vertical: true)
                                         .foregroundColor(k < cur ? .secondary : .primary)
+                                    if !l.note.isEmpty {
+                                        Text(l.note).font(.system(size: 12)).italic().foregroundColor(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                                    }
                                 }
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -233,6 +239,18 @@ struct Controls: View {
             Button { Bridge.send("resetall") } label: { Text("⟲ Reset all tabs to the start").frame(maxWidth: .infinity) }
                 .help("Every flow tab back to its start page and step 1, then the first tab in front")
 
+            if let sl = (s?.slides ?? [])[safe: min(i, max(0, n - 1))] ?? nil {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("SLIDE \(sl.n)").font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
+                    Text(sl.title).font(.system(size: 14, weight: .semibold)).lineLimit(2)
+                    if let img = NSImage(contentsOfFile: sl.image) {
+                        Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
+                            .cornerRadius(4).overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+                    }
+                }
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.08)).cornerRadius(8)
+            }
             Text("STEPS · click to play from there").font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {

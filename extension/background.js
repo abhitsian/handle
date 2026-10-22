@@ -935,7 +935,7 @@ const badge = (tabId, text, color) => {
   if (color) chrome.action.setBadgeBackgroundColor({ color, tabId });
 };
 
-const stepLabel = (s) => s.paste ? `Paste prompt: “${s.paste.slice(0, 48)}…”` : s.clear ? "Clear the prompt box" : `${s.click ? "Click" : "Point at"} “${s.text}”`;
+const stepLabel = (s) => s.slide ? `Slide ${s.slide} · ${s.title || ""}` : s.paste ? `Paste prompt: “${s.paste.slice(0, 48)}…”` : s.clear ? "Clear the prompt box" : `${s.click ? "Click" : "Point at"} “${s.text}”`;
 
 // Publish what the panel shows: current page, its steps, position and state.
 async function publish() {
@@ -959,6 +959,8 @@ async function publish() {
     Object.assign(state, {
       tabId: c.tab.id, title: c.tab.title, group: c.group, flow: !!c.script,
       steps: c.script ? c.script.steps.map(stepLabel) : [], says: c.script ? c.script.steps.map((x) => x.say || "") : [],
+      notes: c.script ? c.script.steps.map((x) => x.note || "") : [],
+      slides: c.script ? c.script.steps.map((x) => (x.slide ? { n: x.slide, title: x.title || "", image: x.image || "" } : null)) : [],
       intro: c.script?.say || "", i: c.st.i, n,
       status: !c.script ? "none" : run.playing ? "playing" : run.error ? "error" : c.st.i >= n ? "done" : c.st.i > 0 ? "paused" : "ready",
       error: run.error || "", pausedBy: run.playing ? "" : run.pausedBy || "", pausedLate: run.pausedLate, dwellEnd: run.playing ? run.dwellEnd || 0 : 0, dwellMs: run.dwellMs || 0,
@@ -987,7 +989,8 @@ async function watchOverride(tabId) {
 // Run one step at the current position; returns false if it failed.
 async function showRunOne(c, run) {
   const step = c.script.steps[c.st.i];
-  let out = await showAction(c.tab.id, step).catch((e) => ({ error: String(e) }));
+  // a slide step does nothing on the page (the presenter moves the deck); it only moves the talk track
+  let out = step.noop ? { ok: true } : await showAction(c.tab.id, step).catch((e) => ({ error: String(e) }));
   // the click before this step may not have taken (page still settling): redo it once, then retry
   const prev = c.st.i > 0 && c.script.steps[c.st.i - 1];
   if (out?.error?.startsWith("not found") && prev?.click && !prev.paste) {
@@ -1063,7 +1066,8 @@ async function showReset() {
   if (run) { run.playing = false; run.error = ""; }
   await chrome.storage.session.set({ [c.key]: { i: 0, start: c.st.start } });
   // always reload: single-page apps keep their inner state when the URL is unchanged
-  await chrome.tabs.update(c.tab.id, { url: c.st.start });
+  // (a slides flow leaves the deck alone: the presenter moves it)
+  if (!c.script?.slides) await chrome.tabs.update(c.tab.id, { url: c.st.start });
   badge(c.tab.id, "", null);
   await publish();
   return { reset: true };
