@@ -277,7 +277,9 @@ async function typeIn(tabId, sel, text, submit) {
       if (isCE(el)) {
         try { const s = window.getSelection(); s.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(el); s.addRange(r); } catch (e) {}
         let ok = false; try { ok = document.execCommand("insertText", false, text); } catch (e) {}
-        if (!ok || !(el.innerText || "").trim()) {
+        // Trust a successful execCommand: editors like Draft.js (X) re-render async, so innerText is
+        // briefly empty; falling back then inserts the text a second time.
+        if (!ok) {
           el.textContent = text;
           el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
         }
