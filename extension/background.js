@@ -12,7 +12,7 @@
 // talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.9.0";
+const VERSION = "1.10.0";
 
 // Never let a debugger op hang forever (e.g. attach stalls because DevTools or
 // another CDP client already holds the tab). Reject fast so the caller gets a
@@ -1205,6 +1205,16 @@ async function dispatch(cmd) {
     case "tab_step": return await stepTab(params.delta || 1);
     case "show_set": await chrome.storage.local.set({ shows: params.shows || [], pins: params.pins || {} }); return { ok: true, shows: (params.shows || []).length };
     case "show_play": return await showPlay();
+    case "tab_open": {
+      const t = await chrome.tabs.create({ url: params.url, active: true });
+      await chrome.windows.update(t.windowId, { focused: true });
+      return { tab_id: t.id, window_id: t.windowId };
+    }
+    case "tab_focus": {
+      const t = await chrome.tabs.update(params.tab_id, { active: true });
+      await chrome.windows.update(t.windowId, { focused: true });
+      return { tab_id: t.id, window_id: t.windowId };
+    }
     case "tab_new": {
       const after = await chrome.tabs.get(params.after_tab_id);
       const t = await chrome.tabs.create({ windowId: after.windowId, index: after.index + 1, url: params.url, active: false });

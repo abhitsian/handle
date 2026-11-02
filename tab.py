@@ -1367,11 +1367,22 @@ def cmd_open(args) -> None:
     ref = args.ref
     # a raw URL (from history/bookmarks/closed) opens as a new tab
     if ref.startswith(("http://", "https://", "file://")):
+        # The extension first: it keeps working when Apple Events to Chrome hang.
+        if _ext_alive():
+            res = _ext_cmd("tab_open", {"url": ref}, timeout=8)
+            if "error" not in res:
+                print(f"Opened  {ref}")
+                return
         n = collect.open_urls([ref])
         print(f"{'Opened' if n else 'Could not open'}  {ref}")
         return
     tabs = load_tabs()
     tab = resolve_one(ref, tabs)
+    if tab.get("ext_tab_id") is not None and _ext_alive():
+        res = _ext_cmd("tab_focus", {"tab_id": tab["ext_tab_id"]}, timeout=8)
+        if "error" not in res:
+            print(f"Focused {tab['id']}  {tab['title']}")
+            return
     ok = collect.focus_tab(tab["url"])
     print(f"{'Focused' if ok else 'Could not focus'} {tab['id']}  {tab['title']}")
 
@@ -2222,7 +2233,10 @@ def cmd_close(args) -> None:
     tabs = load_tabs()
     for ref in args.refs:
         tab = resolve_one(ref, tabs)
-        ok = collect.close_tab(tab["url"])
+        ok = False
+        if tab.get("ext_tab_id") is not None and _ext_alive():
+            ok = "error" not in _ext_cmd("tab_close", {"tab_ids": [tab["ext_tab_id"]]}, timeout=8)
+        ok = ok or collect.close_tab(tab["url"])
         print(f"{'Closed' if ok else 'Could not close'} {tab['id']}  {tab['title']}")
 
 
