@@ -96,12 +96,16 @@ def enqueue(method: str, params: dict | None = None, timeout: float = 20.0,
         return _results.pop(cmd_id)
 
 
-def poll(wait: float = 25.0, device: str = "") -> dict | None:
-    """Long-poll used by an extension: return its next command, or None."""
+def poll(wait: float = 25.0, device: str = "", heartbeat: bool = True) -> dict | None:
+    """Long-poll used by an extension: return its next command, or None.
+
+    The relay bridge polls on a linked browser's behalf, so it passes
+    heartbeat=False: only that browser's own syncs prove it is alive."""
     d = _dev(device)
-    mark_sync(None, d)  # polling also counts as a heartbeat
-    with _cond:
-        _last_poll[d] = time.time()
+    if heartbeat:
+        mark_sync(None, d)  # polling also counts as a heartbeat
+        with _cond:
+            _last_poll[d] = time.time()
     deadline = time.time() + wait
     with _cond:
         q = _queues.setdefault(d, [])

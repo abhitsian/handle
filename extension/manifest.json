@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "Handle",
-    "version": "1.11.0",
-    "description": "Gives Handle a sturdier view of your open Chrome tabs: native tab groups, race-free screenshots, console errors, and a search index of the pages you read. Talks to Handle's local server (127.0.0.1:4910) and, if you link this browser in Options, to one other computer's Handle over your tailnet.",
+    "version": "1.12.0",
+    "description": "Gives Handle a sturdier view of your open Chrome tabs: native tab groups, race-free screenshots, console errors, and a search index of the pages you read. Talks to Handle's local server (127.0.0.1:4910) and, if you link this browser in Options, to another computer's Handle through an end-to-end encrypted relay.",
     "background": {
         "service_worker": "background.js"
     },

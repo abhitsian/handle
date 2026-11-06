@@ -82,9 +82,29 @@ def pair(listen: str = "") -> dict:
 
 def unpair() -> None:
     cfg = load()
-    cfg.pop("listen", None)
-    cfg.pop("token", None)
+    for k in ("listen", "token", "relay"):
+        cfg.pop(k, None)
     save(cfg)
+
+
+def relay_cfg() -> dict | None:
+    r = load().get("relay")
+    return r if isinstance(r, dict) and all(r.get(k) for k in ("url", "room", "token", "key")) else None
+
+
+def pair_relay(url: str) -> dict:
+    """New room on the relay (claimed by this Mac), saved to devices.json."""
+    import relay
+    cfg = load()
+    old = cfg.get("relay") or {}
+    url = (url or old.get("url") or "").rstrip("/")
+    if not (url.startswith("https://") or url.startswith(("http://127.0.0.1", "http://localhost"))):
+        raise RuntimeError("Give the relay's https URL: `tab devices pair --relay https://handle-relay.<you>.workers.dev`")
+    r = old if old.get("url") == url and old.get("room") else relay.new_pairing(url)
+    relay.claim(r)
+    cfg["relay"] = r
+    save(cfg)
+    return r
 
 
 def listen_addrs() -> list[str]:

@@ -24,3 +24,5 @@ modes-sync.log
 extension/deck/*.jpg
 state.*.json
 devices.json
+relay/.wrangler/
+relay/node_modules/

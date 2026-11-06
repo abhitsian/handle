@@ -12,10 +12,13 @@
   p { color:var(--muted); margin:0 0 20px; }
   label { display:block; font-weight:600; margin:16px 0 4px; }
   label small { font-weight:400; color:var(--muted); }
-  input[type=text], input[type=password] { width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:transparent; color:inherit; font:inherit; }
+  input[type=text], input[type=password], textarea { width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:transparent; color:inherit; font:inherit; }
+  textarea { font:12px/1.4 ui-monospace, Menlo, monospace; height:72px; resize:vertical; }
   .row { display:flex; gap:8px; align-items:center; margin-top:14px; }
   button { padding:8px 14px; border-radius:6px; border:1px solid var(--line); background:transparent; color:inherit; font:inherit; cursor:pointer; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  details { margin-top:20px; color:var(--muted); }
+  summary { cursor:pointer; }
   #status { margin-top:16px; min-height:1.5em; }
   .ok { color:var(--accent); } .bad { color:var(--bad); }
   code { font-size:12px; }
@@ -25,14 +28,11 @@
 <main>
   <h1>Link this browser to another computer's Handle</h1>
   <p>That computer can then list, read and act on this browser's tabs with
-     <code>tab --device &lt;name&gt; …</code>. Run <code>tab devices pair</code> there to get the address and token.
-     Both computers need Tailscale on the same account.</p>
+     <code>tab --device &lt;name&gt; …</code>. Run <code>tab devices pair</code> there and paste the pairing code here.
+     Traffic goes through an encrypted relay that cannot read it; nothing else to install.</p>
 
-  <label for="url">Server <small>e.g. http://100.x.y.z:4910</small></label>
-  <input id="url" type="text" placeholder="http://100.x.y.z:4910" autocomplete="off">
-
-  <label for="token">Token</label>
-  <input id="token" type="password" autocomplete="off">
+  <label for="code">Pairing code <small>starts with handle1:</small></label>
+  <textarea id="code" spellcheck="false" autocomplete="off"></textarea>
 
   <label for="device">Device name <small>lowercase letters, digits, dashes</small></label>
   <input id="device" type="text" placeholder="work" autocomplete="off">
@@ -42,12 +42,21 @@
     <label for="local" style="margin:0;font-weight:400">This computer also runs its own Handle server</label>
   </div>
 
+  <details>
+    <summary>Or connect directly over a tailnet</summary>
+    <label for="url">Server <small>e.g. http://100.x.y.z:4910</small></label>
+    <input id="url" type="text" placeholder="http://100.x.y.z:4910" autocomplete="off">
+    <label for="token">Token <small>from <code>tab devices pair --tailnet</code></small></label>
+    <input id="token" type="password" autocomplete="off">
+  </details>
+
   <div class="row">
     <button class="primary" id="save">Save and test</button>
     <button id="unlink">Unlink</button>
   </div>
   <div id="status"></div>
 </main>
+<script src="e2e.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

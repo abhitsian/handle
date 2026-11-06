@@ -2946,6 +2946,23 @@ def cmd_devices(args) -> None:
     """Linked devices: other computers whose Handle extension syncs to this Mac."""
     import devices as dev_lib
     action = args.action
+    if action == "pair" and not args.tailnet:
+        import relay as relay_lib
+        try:
+            cfg = dev_lib.pair_relay(args.relay)
+        except Exception as exc:
+            print("✗ " + str(exc))
+            sys.exit(1)
+        _restart_server()
+        print("Paired through the relay. On the other computer (nothing else to install):\n"
+              "  1. Chrome → chrome://extensions → Developer mode → Load unpacked → the\n"
+              "     extension/ folder from github.com/abhitsian/handle.\n"
+              "  2. Open the extension's Options, paste this pairing code, and name the device:\n\n"
+              f"     {relay_lib.pairing_code(cfg)}\n\n"
+              "  3. Back here: `tab devices` lists it within 30s; then `tab --device <name> list`.\n"
+              "The code holds the encryption key: treat it like a password. "
+              "`tab devices unpair` revokes it.")
+        return
     if action == "pair":
         try:
             cfg = dev_lib.pair(args.listen or "")
@@ -2989,8 +3006,10 @@ def cmd_devices(args) -> None:
     if args.json:
         print(json.dumps(info, indent=2))
         return
-    print(("Listening for linked devices on " + ", ".join(info["listen"])) if info.get("listen")
-          else "Not paired: linked devices are refused. `tab devices pair` to allow them.")
+    ways = ([f"relay {info['relay']} (end-to-end encrypted)"] if info.get("relay") else []) + \
+           [f"tailnet {a}" for a in info.get("listen", [])]
+    print(("Linked devices connect via: " + " · ".join(ways)) if ways
+          else "Not paired: linked devices are refused. `tab devices pair --relay <url>` to allow them.")
     for d in info.get("devices", []):
         name = d.get("device") or "this-mac"
         state = "connected" if d.get("connected") else (
@@ -3305,7 +3324,9 @@ def build_parser() -> argparse.ArgumentParser:
     sdev = sub.add_parser("devices", help="linked devices: other computers' Chrome, reachable with --device <name>")
     sdev.add_argument("action", nargs="?", default="list", choices=["list", "pair", "unpair", "forget"])
     sdev.add_argument("name", nargs="?", default="")
-    sdev.add_argument("--listen", default="", help="address to listen on (default: this Mac's Tailscale IP)")
+    sdev.add_argument("--relay", default="", help="the relay Worker's https URL (remembered after the first pair)")
+    sdev.add_argument("--tailnet", action="store_true", help="pair over the tailnet instead (the other computer runs Tailscale)")
+    sdev.add_argument("--listen", default="", help="with --tailnet: address to listen on (default: this Mac's Tailscale IP)")
     sdev.add_argument("--json", action="store_true")
     sdev.set_defaults(func=cmd_devices)
 

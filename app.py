@@ -1240,6 +1240,7 @@ class Handler(BaseHTTPRequestHandler):
                 st.setdefault(name, extbridge.status(name))
             self._send(200, json.dumps({
                 "listen": devices.listen_addrs(), "port": PORT,
+                "relay": (devices.relay_cfg() or {}).get("url", ""),
                 "paired": bool(devices.load().get("token")),
                 "devices": list(st.values())}), "application/json")
         elif parsed.path == "/api/record/status":
@@ -1512,7 +1513,31 @@ def _serve_linked(addr: str) -> None:
             time.sleep(60)
 
 
+def _start_relay() -> None:
+    cfg = devices.relay_cfg()
+    if not cfg:
+        return
+    import relay
+
+    def on_sync(dev, body):
+        tabs = body.get("tabs", [])
+        collector.collect_from_ext(tabs, device=dev)
+        extbridge.mark_sync({"tab_count": len(tabs), "ext_version": body.get("version", ""),
+                             "via": "relay"}, device=dev)
+
+    def on_result(dev, body):
+        extbridge.deliver_result(body.get("id", ""), body.get("result", {}), device=dev)
+
+    def on_index(dev, body):
+        capture.ingest(body.get("url", ""), body.get("title", ""), body.get("text", ""),
+                       int(body.get("dwell_ms", 0)))
+
+    relay.Bridge(cfg, on_sync, on_result, on_index,
+                 poll_cmd=lambda dev: extbridge.poll(25.0, device=dev, heartbeat=False)).start()
+
+
 if __name__ == "__main__":
+    _start_relay()
     for addr in devices.listen_addrs():
         threading.Thread(target=_serve_linked, args=(addr,), daemon=True).start()
     print(f"Handle  →  http://127.0.0.1:{PORT}")

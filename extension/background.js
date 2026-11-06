@@ -11,15 +11,21 @@
 // real injected function in the isolated world so they survive page CSP. It
 // talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
+importScripts("e2e.js");  // E2E: seal/open for the relay
+
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.11.0";
+const VERSION = "1.12.0";
 
 // ---- hubs: where this browser reports to ------------------------------------
 // The local server (this computer's Handle) always, unless the options say this
 // computer doesn't run one. Plus, optionally, a linked hub: another computer's
 // Handle reached over the tailnet, which then sees this browser as a named
 // device (`tab --device <name> ...` there). Set in the extension's Options.
-let REMOTE = null;  // { url, token, device, localServer }
+// REMOTE is either a direct hub { url, token, device, localServer } (tailnet), or
+// a relay { mode: "relay", url, room, token, key, device, localServer }: both
+// computers connect out to a Cloudflare Worker and every message is sealed with
+// `key`, which the Worker never sees.
+let REMOTE = null;
 async function loadRemote() {
   try {
     const { remote } = await chrome.storage.local.get("remote");
@@ -30,7 +36,13 @@ async function loadRemote() {
 function hubs() {
   const out = [];
   if (!REMOTE || REMOTE.localServer !== false) out.push({ url: HANDLE, headers: {} });
-  if (REMOTE) out.push({
+  if (REMOTE && REMOTE.mode === "relay") out.push({
+    relay: true,
+    url: REMOTE.url.replace(/\/+$/, "") + "/r/" + REMOTE.room,
+    headers: { Authorization: "Bearer " + REMOTE.token },
+    key: REMOTE.key, device: REMOTE.device,
+  });
+  else if (REMOTE) out.push({
     url: REMOTE.url.replace(/\/+$/, ""),
     headers: { "X-Handle-Token": REMOTE.token, "X-Handle-Device": REMOTE.device },
   });
@@ -39,12 +51,22 @@ function hubs() {
 function hubFetch(hub, path, opts = {}) {
   return fetch(hub.url + path, { ...opts, headers: { ...(opts.headers || {}), ...hub.headers } });
 }
-function postAll(path, body) {
-  return Promise.all(hubs().map((h) => hubFetch(h, path, {
+const RELAY_KIND = { "/ext/sync": "sync", "/ext/result": "result", "/ext/index": "index", "/ext/hello": "hello" };
+async function hubPost(hub, path, body) {
+  if (hub.relay) {
+    const kind = RELAY_KIND[path];
+    if (!kind) return;  // recording etc. stay with the local server
+    const sealed = await E2E.seal(hub.key, JSON.stringify({ device: hub.device, kind, body }));
+    return hubFetch(hub, "/up", { method: "POST", headers: { "Content-Type": "text/plain" }, body: sealed });
+  }
+  return hubFetch(hub, path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).catch(() => {})));
+  });
+}
+function postAll(path, body) {
+  return Promise.all(hubs().map((h) => hubPost(h, path, body).catch(() => {})));
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.remote) loadRemote().then(() => { syncTabs(); ensurePolling(); });
@@ -1311,6 +1333,7 @@ const FOCUS = { tabId: null, url: "", since: 0, captured: false };
 async function fetchPolicy() {
   if (Date.now() - POLICY_AT < 60000) return POLICY;
   for (const h of hubs()) {
+    if (h.relay) continue;  // the relay is one-way mailboxes; capture follows the local policy only
     try {
       const r = await hubFetch(h, "/ext/policy");
       if (!r.ok) continue;
@@ -1449,13 +1472,7 @@ async function handleCommand(cmd, hub) {
   let result;
   try { result = await dispatch(cmd); }
   catch (e) { result = { error: String(e) }; }
-  try {
-    await hubFetch(hub, "/ext/result", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: cmd.id, result }),
-    });
-  } catch (e) {}
+  try { await hubPost(hub, "/ext/result", { id: cmd.id, result }); } catch (e) {}
 }
 
 // One long-poll loop per hub, so a linked computer can drive this browser while
@@ -1472,9 +1489,17 @@ async function pollLoop(hub) {
       if (!hubs().some((h) => h.url === hub.url)) break;
       let cmd = null;
       try {
-        const r = await hubFetch(hub, "/ext/poll");
+        const r = await hubFetch(hub, hub.relay ? "/down/" + hub.device : "/ext/poll");
         L.lastPollAt = Date.now();
         if (!r.ok) { await new Promise((res) => setTimeout(res, 5000)); continue; }
+        if (hub.relay) {
+          // a batch of sealed commands; anything not sealed with our key is dropped
+          for (const sealed of (await r.json()) || []) {
+            try { const c = JSON.parse(await E2E.open(hub.key, sealed)); if (c && c.id) handleCommand(c, hub); }
+            catch (e) {}
+          }
+          continue;
+        }
         cmd = await r.json();
       } catch (e) {
         // no server at this hub: back off longer for a linked one (tailnet down)

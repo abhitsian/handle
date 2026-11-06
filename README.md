@@ -322,15 +322,16 @@ separate, explicit capability; see *Acting on a tab* above.)
 
 ## Linked devices: another computer's Chrome
 
-Handle can read and act on a browser on a different computer. That computer needs only the Chrome extension; it does not run the Handle server.
+Handle can read and act on a browser on a different computer. That computer needs only the Chrome extension.
 
-On this Mac:
+Both computers connect out to a small relay you deploy once on Cloudflare (`relay/`), the way Claude in Chrome connects through Anthropic's servers, so neither opens a port. Every message is encrypted on each end (AES-256-CTR plus HMAC-SHA256, `e2e.py` and `extension/e2e.js`) with a key that lives in the pairing code and never reaches the relay.
 
 ```bash
-tab devices pair          # listens on this Mac's Tailscale IP; prints the address and a token
+cd relay && npx wrangler deploy                       # once; prints https://handle-relay.<you>.workers.dev
+tab devices pair --relay https://handle-relay.<you>.workers.dev   # prints a pairing code
 ```
 
-On the other computer, install Tailscale on the same account, load the extension, open its Options, and enter the server address, the token and a device name (for example `work`). Its extension then syncs its tabs here and takes commands, under its own handle numbers.
+On the other computer, load the extension, open its Options, paste the pairing code and name the device (for example `work`).
 
 ```bash
 tab devices                          # linked devices, connected or last seen
@@ -342,9 +343,11 @@ tab -D work click t4 --text "Next"   # act there (same guardrails as local)
 
 The MCP tools take the same thing as a `device` argument, and a `devices` tool lists them.
 
-What works on a linked device: anything that goes through the tab list or the extension (list, find, grep, read, shot, active, open, close, eval, click, type, scroll, harvest, watch, console). What does not: commands that read this Mac's disk or screen (history, bookmarks, downloads, clipboard, CDP, modes, Pointer recording).
+What works on a linked device: anything that goes through the tab list or the extension (list, find, grep, read, shot, active, open, close, eval, click, type, scroll, harvest, watch, console). What does not: commands that read this Mac's disk or screen (history, bookmarks, downloads, clipboard, CDP, modes, Pointer recording). Passive capture stays off on a relay-only browser.
 
-Constraint: a linked device's request must come from a non-loopback address with the token and may reach only the extension endpoints. Commands are issued only from this Mac. `tab devices unpair` removes the token and stops listening on the tailnet.
+Constraint: the pairing code holds the key; treat it like a password. `tab devices unpair` drops it, and a new pair creates a new room. The relay room is claimed by this Mac at pairing, and every request must carry its token. Commands are issued only from this Mac.
+
+If both computers run Tailscale, `tab devices pair --tailnet` connects them directly instead (the Options page takes a server address and token).
 
 ## Sturdier backends — the extension & CDP
 
