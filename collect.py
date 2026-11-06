@@ -37,6 +37,48 @@ CHROME_EPOCH_OFFSET = 11_644_473_600  # seconds between 1601-01-01 and 1970-01-0
 SKIP_PREFIXES = ("chrome://", "chrome-extension://", "about:", "edge://", "devtools://")
 SKIP_SUBSTRINGS = ("localhost:4910", "127.0.0.1:4910")
 
+# --------------------------------------------------------------------------- #
+# Devices. "" is this Mac. Any other name is a linked device: a Chrome somewhere
+# else whose Handle extension syncs to this server over the tailnet. Each device
+# keeps its own state file and its own handle numbers (t1, t2...). AppleScript,
+# Chrome's History db and screencapture only reach THIS Mac, so for a linked
+# device every read and action goes through its extension.
+# --------------------------------------------------------------------------- #
+DEVICE = ""
+
+
+class LocalOnly(RuntimeError):
+    """An AppleScript/disk path was asked for on a linked device."""
+
+
+def state_path(device: str = "") -> Path:
+    return APP_DIR / (f"state.{device}.json" if device else "state.json")
+
+
+def set_device(device: str) -> None:
+    global DEVICE, STATE_PATH
+    DEVICE = (device or "").strip()
+    STATE_PATH = state_path(DEVICE)
+
+
+def _local_only(what: str) -> None:
+    if DEVICE:
+        raise LocalOnly(f"{what} only works on this Mac; on device {DEVICE!r} Handle "
+                        f"goes through its extension, which is not answering.")
+
+
+def _match_prev(previous: dict, by_ext: dict, url: str, ext_id) -> dict:
+    """The previous record for this tab: same Chrome tab id first, then same URL.
+
+    Papercuts 2026-11-01..05 (handle): handles were keyed by URL, so a redirect,
+    an SPA route change or a login bounce gave the SAME tab a new handle and the
+    old one went stale mid-script (t19 lost during a 529-post pull; open_tab ->
+    t64 -> "not in the index"). Chrome's tab id survives navigation, so it wins.
+    """
+    if ext_id is not None and ext_id in by_ext:
+        return by_ext[ext_id]
+    return previous.get(url, {})
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -203,6 +245,7 @@ def collect() -> dict:
     refreshes. Tabs closed in Chrome are dropped — closing a tab is how you
     tell Handle you're done with it.
     """
+    _local_only("An AppleScript tab scan")
     state = load_json(STATE_PATH, {})
     if not isinstance(state, dict):
         state = {}
@@ -239,8 +282,10 @@ def collect() -> dict:
             "user_cluster": prev.get("user_cluster", ""),
             "pinned": prev.get("pinned", False),
         }
-        # carry initiative/workstream overrides only when set; absence = auto
-        for key in ("user_initiative", "user_workstream"):
+        # keep the extension's tab id: AppleScript can't see it, and dropping it
+        # broke every extension action until the next sync
+        for key in ("user_initiative", "user_workstream", "ext_tab_id",
+                    "chrome_group", "chrome_group_color"):
             if key in prev:
                 tabs[url][key] = prev[key]
 
@@ -255,7 +300,7 @@ def collect() -> dict:
     return new_state
 
 
-def collect_from_ext(ext_tabs: list[dict]) -> dict:
+def collect_from_ext(ext_tabs: list[dict], device: str = "") -> dict:
     """Merge tabs pushed by the Chrome extension into state.json.
 
     Same preservation contract as collect() — stable handles, notes, clusters,
@@ -263,7 +308,8 @@ def collect_from_ext(ext_tabs: list[dict]) -> dict:
     chrome.tabGroups data, so it needs no AppleScript and carries the user's
     real native tab group (name + color) when present.
     """
-    state = load_json(STATE_PATH, {})
+    path = state_path(device)  # explicit: the server syncs several devices at once
+    state = load_json(path, {})
     if not isinstance(state, dict):
         state = {}
     previous = state.get("tabs", {})
@@ -271,18 +317,25 @@ def collect_from_ext(ext_tabs: list[dict]) -> dict:
     now = _now()
 
     urls = [t.get("url", "") for t in ext_tabs if t.get("url")]
-    visits = chrome_history_visits(urls)
+    # Chrome's History db is on this Mac only; a linked device has no visit times
+    visits = {} if device else chrome_history_visits(urls)
+    by_ext = {t["ext_tab_id"]: t for t in previous.values()
+              if isinstance(t, dict) and t.get("ext_tab_id") is not None}
+    taken: set[str] = set()
 
     tabs: dict[str, dict] = {}
     for t in ext_tabs:
         url = t.get("url", "")
         if not url or url.startswith(SKIP_PREFIXES):
             continue
-        prev = previous.get(url, {})
+        if url in tabs:  # same URL open twice: one row per URL (state is URL-keyed)
+            continue
+        prev = _match_prev(previous, by_ext, url, t.get("tab_id"))
         tab_id = prev.get("id")
-        if not tab_id:
+        if not tab_id or tab_id in taken:
             tab_id = f"t{next_id}"
             next_id += 1
+        taken.add(tab_id)
         rec = {
             "id": tab_id,
             "url": url,
@@ -297,6 +350,8 @@ def collect_from_ext(ext_tabs: list[dict]) -> dict:
             "user_cluster": prev.get("user_cluster", ""),
             "pinned": bool(t.get("pinned", prev.get("pinned", False))),
             "ext_tab_id": t.get("tab_id"),
+            "active": bool(t.get("active")),
+            "focused": bool(t.get("focused")),
         }
         # the user's real Chrome tab group, when the tab is in one
         if t.get("group"):
@@ -314,13 +369,16 @@ def collect_from_ext(ext_tabs: list[dict]) -> dict:
         "last_deduced": state.get("last_deduced"),
         "group_by": state.get("group_by", "task"),
         "source": "extension",
+        "device": device,
     }
-    write_json(STATE_PATH, new_state)
+    write_json(path, new_state)
     return new_state
 
 
 def close_tab(url: str) -> bool:
     """Close the first Chrome tab matching `url`. Returns True on success."""
+    if DEVICE:
+        return False
     safe = url.replace("\\", "\\\\").replace('"', '\\"')
     script = (
         'tell application "Google Chrome"\n'
@@ -350,6 +408,8 @@ def open_urls(urls: list[str]) -> int:
 
     Used by workspace "resume" — reopens a parked initiative's tab set.
     """
+    if DEVICE:
+        return 0
     urls = [u for u in urls if u]
     if not urls:
         return 0
@@ -375,7 +435,22 @@ def open_urls(urls: list[str]) -> int:
 
 
 def active_tab_url() -> str:
-    """Return the URL of the frontmost Chrome tab — 'the tab I'm looking at'."""
+    """Return the URL of the frontmost Chrome tab — 'the tab I'm looking at'.
+
+    The extension's last sync knows which tab is active in the focused window, so
+    that answer comes first: AppleScript is slow, can hit a second Chrome (a
+    puppeteer instance from the same .app), and can't reach a linked device.
+    """
+    try:
+        st = load_json(STATE_PATH, {})
+        rows = [t for t in (st.get("tabs") or {}).values() if isinstance(t, dict)]
+        hit = [t for t in rows if t.get("focused")]
+        if hit:
+            return hit[0]["url"]
+    except Exception:
+        pass
+    if DEVICE:
+        return ""
     script = (
         'tell application "Google Chrome"\n'
         '  if (count of windows) = 0 then return ""\n'
@@ -427,6 +502,8 @@ def focus_tab(url: str) -> bool:
     Tries an exact URL match first, then looser prefixes, so a single-page app that
     has navigated since the last scan is still found instead of reported missing.
     """
+    if DEVICE:
+        return False
     for i, candidate in enumerate(_focus_prefixes(url)):
         safe = candidate.replace("\\", "\\\\").replace('"', '\\"')
         # The first pass is an exact compare; later passes accept a prefix.
@@ -632,6 +709,8 @@ def read_tab_content(url: str, limit: int = 8000) -> str:
     Returns "" if the tab isn't found, Chrome's "Allow JavaScript from Apple
     Events" is off, or the page has no DOM text (a canvas app, a PDF viewer).
     """
+    if DEVICE:
+        _local_only("An AppleScript page read")
     raw = run_tab_js(url, MAIN_CONTENT_JS, limit * 3)
     return " ".join(raw.split())[:limit]
 
@@ -747,6 +826,9 @@ def screenshot_tab(url: str, full: bool = False, max_shots: int = 6):
     captures successive viewports. Returns (list_of_paths, error_message).
     Needs macOS Screen Recording permission for the terminal running this.
     """
+    if DEVICE:
+        return [], (f"window screenshots only work on this Mac; device {DEVICE!r} "
+                    f"screenshots through its extension, which did not answer")
     if not focus_tab(url):
         return [], ("tab not found in Chrome by URL (tried exact, then prefix matches) — "
                     "the tab has probably navigated since the last scan. "

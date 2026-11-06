@@ -320,6 +320,32 @@ Separately, it reads **copies** of Chrome's own history/downloads databases —
 strictly read-only, pointers only. (Driving a live tab — click/type/watch — is a
 separate, explicit capability; see *Acting on a tab* above.)
 
+## Linked devices: another computer's Chrome
+
+Handle can read and act on a browser on a different computer. That computer needs only the Chrome extension; it does not run the Handle server.
+
+On this Mac:
+
+```bash
+tab devices pair          # listens on this Mac's Tailscale IP; prints the address and a token
+```
+
+On the other computer, install Tailscale on the same account, load the extension, open its Options, and enter the server address, the token and a device name (for example `work`). Its extension then syncs its tabs here and takes commands, under its own handle numbers.
+
+```bash
+tab devices                          # linked devices, connected or last seen
+tab --device work list               # that browser's tabs
+tab --device work read t4 --live     # read a logged-in page there
+tab --device work open https://...   # open a tab there; prints the new handle
+tab -D work click t4 --text "Next"   # act there (same guardrails as local)
+```
+
+The MCP tools take the same thing as a `device` argument, and a `devices` tool lists them.
+
+What works on a linked device: anything that goes through the tab list or the extension (list, find, grep, read, shot, active, open, close, eval, click, type, scroll, harvest, watch, console). What does not: commands that read this Mac's disk or screen (history, bookmarks, downloads, clipboard, CDP, modes, Pointer recording).
+
+Constraint: a linked device's request must come from a non-loopback address with the token and may reach only the extension endpoints. Commands are issued only from this Mac. `tab devices unpair` removes the token and stops listening on the tailnet.
+
 ## Sturdier backends — the extension & CDP
 
 The default read path is **AppleScript** (zero install). Two optional backends

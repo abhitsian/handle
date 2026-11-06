@@ -12,7 +12,43 @@
 // talks to nothing but 127.0.0.1:4910 and never navigates on its own.
 
 const HANDLE = "http://127.0.0.1:4910";
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
+
+// ---- hubs: where this browser reports to ------------------------------------
+// The local server (this computer's Handle) always, unless the options say this
+// computer doesn't run one. Plus, optionally, a linked hub: another computer's
+// Handle reached over the tailnet, which then sees this browser as a named
+// device (`tab --device <name> ...` there). Set in the extension's Options.
+let REMOTE = null;  // { url, token, device, localServer }
+async function loadRemote() {
+  try {
+    const { remote } = await chrome.storage.local.get("remote");
+    REMOTE = remote && remote.url && remote.token && remote.device ? remote : null;
+  } catch (e) { REMOTE = null; }
+  return REMOTE;
+}
+function hubs() {
+  const out = [];
+  if (!REMOTE || REMOTE.localServer !== false) out.push({ url: HANDLE, headers: {} });
+  if (REMOTE) out.push({
+    url: REMOTE.url.replace(/\/+$/, ""),
+    headers: { "X-Handle-Token": REMOTE.token, "X-Handle-Device": REMOTE.device },
+  });
+  return out;
+}
+function hubFetch(hub, path, opts = {}) {
+  return fetch(hub.url + path, { ...opts, headers: { ...(opts.headers || {}), ...hub.headers } });
+}
+function postAll(path, body) {
+  return Promise.all(hubs().map((h) => hubFetch(h, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {})));
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.remote) loadRemote().then(() => { syncTabs(); ensurePolling(); });
+});
 
 // Never let a debugger op hang forever (e.g. attach stalls because DevTools or
 // another CDP client already holds the tab). Reject fast so the caller gets a
@@ -35,6 +71,9 @@ async function syncTabs() {
   }
   const groupById = {};
   for (const g of groups) groupById[g.id] = g;
+  // which tab the user is looking at: active in the last-focused window
+  let focusedWin = null;
+  try { focusedWin = (await chrome.windows.getLastFocused()).id; } catch (e) {}
   const payload = tabs
     .filter((t) => t.url && /^https?:|^file:/.test(t.url))
     .map((t) => {
@@ -47,19 +86,13 @@ async function syncTabs() {
         index: t.index,
         pinned: !!t.pinned,
         active: !!t.active,
+        focused: !!t.active && t.windowId === focusedWin,
         group: g ? (g.title || "(unnamed group)") : "",
         group_color: g ? g.color : "",
       };
     });
-  try {
-    await fetch(`${HANDLE}/ext/sync`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabs: payload, version: VERSION }),
-    });
-  } catch (e) {
-    /* server not running — fine, the CLI falls back to AppleScript */
-  }
+  // server not running is fine: the CLI falls back to AppleScript
+  await postAll("/ext/sync", { tabs: payload, version: VERSION });
 }
 
 // ---- live command handlers ------------------------------------------------
@@ -103,8 +136,18 @@ async function evalIn(tabId, expression) {
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: (e) => {
-      try { return String(eval(e)); } catch (err) { return "ERR: " + err; }
+    // Awaits a returned promise (papercut 2026-11-01: an async expression printed
+    // "[object Promise]") and returns plain objects/arrays as JSON.
+    func: async (e) => {
+      try {
+        let v = eval(e);
+        if (v && typeof v.then === "function") v = await v;
+        if (v !== null && typeof v === "object" &&
+            (Array.isArray(v) || Object.getPrototypeOf(v) === Object.prototype)) {
+          try { return JSON.stringify(v); } catch (x) {}
+        }
+        return String(v);
+      } catch (err) { return "ERR: " + err; }
     },
     args: [expression],
   });
@@ -251,11 +294,11 @@ async function resolveEls(tabId, intent) {
   return { value: res.result || [] };
 }
 
-async function typeIn(tabId, sel, text, submit) {
+async function typeIn(tabId, sel, text, submit, nth) {
   await wakeTab(tabId);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (sel, text, submit) => {
+    func: (sel, text, submit, nth) => {
       const deep = (root, acc) => {
         let kids; try { kids = root.querySelectorAll("*"); } catch (e) { return acc; }
         for (const el of kids) { acc.push(el); if (el.shadowRoot) deep(el.shadowRoot, acc); }
@@ -265,12 +308,22 @@ async function typeIn(tabId, sel, text, submit) {
       const isCE = (e) => e && (e.isContentEditable || (e.getAttribute && e.getAttribute("contenteditable") === "true"));
       const lbl = (e) => ((e.getAttribute && (e.getAttribute("aria-label") || e.getAttribute("data-placeholder") || e.getAttribute("placeholder"))) || e.placeholder || "");
       let el = null;
-      if (sel) el = document.querySelector(sel) || all.find((e) => { try { return e.matches(sel); } catch (x) { return false; } });
+      const shown = (e) => !!(e.offsetParent || e.getClientRects().length);
+      if (sel) {
+        // nth picks among several matches (papercut 2026-10-30: Typeform Q4 vs Q5)
+        let list = [];
+        try { list = [...document.querySelectorAll(sel)]; } catch (x) {}
+        if (!list.length) list = all.filter((e) => { try { return e.matches(sel); } catch (x) { return false; } });
+        el = list[nth || 0] || null;
+      }
       if (!el) {
         // heuristic: a message/Copilot composer — prefer a labelled editable
         el = all.find((e) => isCE(e) && /copilot|message|ask|reply|compose/i.test(lbl(e)))
           || all.find((e) => isCE(e))
-          || all.find((e) => /^(TEXTAREA|INPUT)$/.test(e.tagName) && /copilot|message|ask/i.test(lbl(e) + ""));
+          || all.find((e) => /^(TEXTAREA|INPUT)$/.test(e.tagName) && /copilot|message|ask/i.test(lbl(e) + ""))
+          // a plain visible textarea, then a text input (papercut 2026-10-29: Workera)
+          || all.find((e) => e.tagName === "TEXTAREA" && shown(e) && !e.disabled)
+          || all.find((e) => e.tagName === "INPUT" && /^(text|search|email|)$/.test(e.type || "") && shown(e) && !e.disabled);
       }
       if (!el) return "NOT_FOUND";
       el.focus();
@@ -284,7 +337,10 @@ async function typeIn(tabId, sel, text, submit) {
           el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
         }
       } else {
-        el.value = text;
+        // the native setter, so React/Vue controlled inputs see the change
+        const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = (Object.getOwnPropertyDescriptor(proto, "value") || {}).set;
+        if (setter) setter.call(el, text); else el.value = text;
         el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
       }
@@ -295,7 +351,7 @@ async function typeIn(tabId, sel, text, submit) {
       }
       return "typed" + (isCE(el) ? "(ce)" : "") + (sent ? "+enter" : "") + ": " + ((el.innerText || el.value || "") + "").trim().slice(0, 40);
     },
-    args: [sel || null, text, !!submit],
+    args: [sel || null, text, !!submit, nth || 0],
   });
   return { value: res.result };
 }
@@ -1189,7 +1245,7 @@ async function dispatch(cmd) {
     case "read": return await withTimeout(readTab(tabId), 12000, "read");
     case "eval": return await evalIn(tabId, params.expression || "");
     case "click": return await clickIn(tabId, params.sel, params.text, params.nth, params.near);
-    case "type": return await typeIn(tabId, params.sel, params.text, params.submit);
+    case "type": return await typeIn(tabId, params.sel, params.text, params.submit, params.nth);
     case "resolve": return await resolveEls(tabId, params.intent || "");
     case "scroll": return await scrollIn(tabId, params.dy || 2000);
     case "harvest": return await withTimeout(harvestIn(tabId, params.sel || "", params.fields || {}, params.limit || 0), 12000, "harvest");
@@ -1254,11 +1310,15 @@ const FOCUS = { tabId: null, url: "", since: 0, captured: false };
 
 async function fetchPolicy() {
   if (Date.now() - POLICY_AT < 60000) return POLICY;
-  try {
-    const r = await fetch(`${HANDLE}/ext/policy`);
-    POLICY = await r.json();
-    POLICY_AT = Date.now();
-  } catch (e) { /* server down → POLICY stays as-is; capture just pauses */ }
+  for (const h of hubs()) {
+    try {
+      const r = await hubFetch(h, "/ext/policy");
+      if (!r.ok) continue;
+      POLICY = await r.json();
+      POLICY_AT = Date.now();
+      break;
+    } catch (e) { /* that hub is down → try the next; none → capture pauses */ }
+  }
   return POLICY;
 }
 
@@ -1346,15 +1406,8 @@ async function maybeCapture(rec) {
   if (!page || !page.text || page.text.length < (policy.min_chars || 500)) return;
   if (capExcluded(page.url)) return;      // re-check the URL the page reports
 
-  try {
-    await fetch(`${HANDLE}/ext/index`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: page.url, title: page.title, text: page.text, dwell_ms: dwell,
-      }),
-    });
-  } catch (e) { /* server down — the page gets another chance next visit */ }
+  // server down → the page gets another chance next visit
+  await postAll("/ext/index", { url: page.url, title: page.title, text: page.text, dwell_ms: dwell });
 }
 
 // Move the focus pointer to a new (tab, url). Flushes the one we're leaving.
@@ -1391,15 +1444,13 @@ function captureTick() {
 // so we keep a poll request parked at almost all times and heal fast: short
 // error backoff (no long dead-air gaps), a stall check that restarts a wedged
 // loop, and ensurePolling() called from every wake (alarm + tab events).
-let lastPollAt = 0;
-let looping = false;
 
-async function handleCommand(cmd) {
+async function handleCommand(cmd, hub) {
   let result;
   try { result = await dispatch(cmd); }
   catch (e) { result = { error: String(e) }; }
   try {
-    await fetch(`${HANDLE}/ext/result`, {
+    await hubFetch(hub, "/ext/result", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: cmd.id, result }),
@@ -1407,40 +1458,52 @@ async function handleCommand(cmd) {
   } catch (e) {}
 }
 
-async function pollLoop() {
-  if (looping) return;
-  looping = true;
+// One long-poll loop per hub, so a linked computer can drive this browser while
+// the local Handle does too, and one hub being down never stalls the other.
+const LOOPS = {};  // hub url -> { looping, lastPollAt }
+
+async function pollLoop(hub) {
+  const L = LOOPS[hub.url] || (LOOPS[hub.url] = { looping: false, lastPollAt: 0 });
+  if (L.looping) return;
+  L.looping = true;
   try {
-    while (looping) {
+    while (L.looping) {
+      // the hub was removed in Options: stop this loop
+      if (!hubs().some((h) => h.url === hub.url)) break;
       let cmd = null;
       try {
-        const r = await fetch(`${HANDLE}/ext/poll`);
-        lastPollAt = Date.now();
+        const r = await hubFetch(hub, "/ext/poll");
+        L.lastPollAt = Date.now();
+        if (!r.ok) { await new Promise((res) => setTimeout(res, 5000)); continue; }
         cmd = await r.json();
       } catch (e) {
-        await new Promise((res) => setTimeout(res, 1000));
+        // no server at this hub: back off longer for a linked one (tailnet down)
+        await new Promise((res) => setTimeout(res, hub.url === HANDLE ? 1000 : 5000));
         continue;
       }
       // Dispatch WITHOUT awaiting: the loop re-polls immediately so a fetch is
       // always in flight. That pending request keeps the MV3 worker warm
       // through a slow debugger op (a bare await would let it suspend mid-op).
-      if (cmd && cmd.id) handleCommand(cmd);
+      if (cmd && cmd.id) handleCommand(cmd, hub);
     }
   } finally {
-    looping = false;
+    L.looping = false;
   }
 }
 
 function ensurePolling() {
   // start if not running, or if a prior loop looks stalled / wedged
-  if (!looping || Date.now() - lastPollAt > 35000) {
-    looping = false;
-    pollLoop();
+  for (const hub of hubs()) {
+    const L = LOOPS[hub.url];
+    if (!L || !L.looping || Date.now() - L.lastPollAt > 35000) {
+      if (L) L.looping = false;
+      pollLoop(hub);
+    }
   }
 }
 
 // ---- lifecycle ------------------------------------------------------------
-function kick() { syncTabs(); ensurePolling(); recRestore(); focusCurrent(); }
+async function kick() { await loadRemote(); syncTabs(); ensurePolling(); recRestore(); focusCurrent(); }
 
 chrome.runtime.onStartup.addListener(kick);
 chrome.runtime.onInstalled.addListener(kick);

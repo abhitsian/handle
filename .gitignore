@@ -22,3 +22,5 @@ capture.json
 modes.json
 modes-sync.log
 extension/deck/*.jpg
+state.*.json
+devices.json

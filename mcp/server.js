@@ -33,8 +33,13 @@ const MAX_IMAGES = 8; // safety cap on a single read/screenshot call
 const log = (...a) => process.stderr.write('[handle-mcp] ' + a.join(' ') + '\n');
 
 // ---------- run the CLI ----------
+// Set per tool call from its `device` argument: run against a linked device's
+// Chrome (another computer whose Handle extension syncs to this Mac).
+let CALL_DEVICE = '';
+
 function runTab(args, { json = false } = {}) {
   let out;
+  if (CALL_DEVICE) args = ['--device', CALL_DEVICE, ...args];
   try {
     out = execFileSync(PYTHON, [TAB_PY, ...args], {
       encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 60000,
@@ -189,6 +194,7 @@ function toolActiveTab() {
 }
 
 function toolOpenTab(a) { if (!a.ref) throw new Error('ref is required'); return [{ type: 'text', text: runTab(['open', String(a.ref)]) }]; }
+function toolDevices() { return [{ type: 'text', text: runTab(['devices']) }]; }
 function toolCloseTab(a) {
   const refs = a.ref == null ? [] : asArray(a.ref).map(String);
   if (!refs.length) throw new Error('ref is required');
@@ -216,6 +222,7 @@ function toolTypeTab(a) {
   const args = ['type', String(a.ref), a.selector == null ? '' : String(a.selector), String(a.text)];
   if (a.submit) args.push('--submit');
   if (a.confirm) args.push('--confirm');
+  if (a.nth != null) args.push('--nth', String(a.nth));
   return [{ type: 'text', text: runTab(args) }];
 }
 function toolSearchWeb(a) {
@@ -434,7 +441,7 @@ const TOOLS = [
   },
   {
     name: 'open_tab',
-    description: 'Bring a tab to the front in Chrome — or open a raw http(s)/file URL as a new tab (e.g. a url from history/closed/bookmarks/downloads).',
+    description: 'Bring a tab to the front in Chrome — or open a raw http(s)/file URL as a new tab (e.g. a url from history/closed/bookmarks/downloads). Opening a URL returns the new tab\'s handle once the extension has registered it, so read it by that handle next.',
     inputSchema: { type: 'object', properties: { ref: { type: 'string', description: REF_DESC + ' Or a raw http(s)://file:// URL to open as a new tab.' } }, required: ['ref'] },
   },
   {
@@ -630,6 +637,24 @@ const TOOLS = [
   },
 ];
 
+TOOLS.push({
+  name: 'devices',
+  description: 'List linked devices: other computers whose Chrome reports to this Mac\'s Handle. Pass a device name as `device` on list_tabs, find_tab, read_tab, screenshot_tab, active_tab, open_tab, close_tab, click_tab, type_tab or console to work in that browser.',
+  inputSchema: { type: 'object', properties: {} },
+});
+
+// Tools that can run against a linked device get an optional `device` argument.
+const DEVICE_TOOLS = new Set(['list_tabs', 'find_tab', 'grep_tabs', 'ask_tabs', 'save_tabs', 'read_tab',
+  'screenshot_tab', 'active_tab', 'open_tab', 'close_tab', 'note_tab', 'group_tab', 'pin_tab',
+  'refresh_tabs', 'console', 'ext_status', 'click_tab', 'type_tab']);
+for (const t of TOOLS) {
+  if (!DEVICE_TOOLS.has(t.name)) continue;
+  t.inputSchema.properties = t.inputSchema.properties || {};
+  t.inputSchema.properties.device = { type: 'string', description: 'A linked device name from the devices tool. Omit for this Mac.' };
+}
+const typeTool = TOOLS.find((t) => t.name === 'type_tab');
+if (typeTool) typeTool.inputSchema.properties.nth = { type: 'number', description: 'Which match of the selector, 0-based. Default 0.' };
+
 const HANDLERS = {
   list_tabs: toolListTabs, find_tab: toolFindTab, grep_tabs: toolGrepTabs, ask_tabs: toolAskTabs,
   save_tabs: toolSaveTabs, list_bundles: toolListBundles, recall_bundle: toolRecallBundle,
@@ -640,7 +665,7 @@ const HANDLERS = {
   history: toolHistory, closed: toolClosed, bookmarks: toolBookmarks, downloads: toolDownloads,
   journeys: toolJourneys, most_visited: toolTop, console: toolConsole, ext_status: toolExtStatus,
   click_tab: toolClickTab, type_tab: toolTypeTab, search_web: toolSearchWeb, audit: toolAudit, record_tab: toolRecordTab,
-  meeting: toolMeeting,
+  meeting: toolMeeting, devices: toolDevices,
 };
 
 // ---------- JSON-RPC / MCP stdio loop ----------
@@ -665,6 +690,7 @@ function handle(msg) {
     const args = (params && params.arguments) || {};
     const fn = HANDLERS[name];
     if (!fn) { send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'Unknown tool: ' + name } }); return; }
+    CALL_DEVICE = typeof args.device === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(args.device) ? args.device : '';
     try {
       const content = fn(args);
       send({ jsonrpc: '2.0', id, result: { content } });

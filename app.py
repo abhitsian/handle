@@ -29,13 +29,16 @@ import recorder
 import stash
 import capture
 import webindex
+import devices
+import os
+import threading
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_PATH = APP_DIR / "state.json"
 DEDUCTIONS_PATH = APP_DIR / "deductions.json"
 ACTIONS_PATH = APP_DIR / "actions.json"
 STALE_DAYS = 3
-PORT = 4910
+PORT = int(os.environ.get("HANDLE_PORT", "4910"))
 
 # Group-by modes that group tabs by a per-tab field (window is special-cased).
 GROUP_MODES = ("task", "initiative", "workstream", "window")
@@ -1159,7 +1162,51 @@ class Handler(BaseHTTPRequestHandler):
     def _ok(self):
         self._send(200, json.dumps({"ok": True}), "application/json")
 
+    # --- request gate --------------------------------------------------------
+    # Loopback callers are the CLI, the board, his other local apps and this Mac's
+    # extension. Two holes closed (2026-11-06):
+    #  - CSRF: any web page could POST text/plain to 127.0.0.1:4910/ext/cmd and
+    #    have the extension eval JS in his logged-in tabs. A foreign Origin is now
+    #    refused on writes.
+    #  - DNS rebinding: a page whose domain resolves to 127.0.0.1 is same-origin
+    #    with us. The Host header must name this server.
+    # Non-loopback callers are linked devices: token required, extension
+    # endpoints only, and never /ext/cmd.
+    def _is_loopback(self) -> bool:
+        return self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+    def _device(self, data: dict | None = None) -> str:
+        if not self._is_loopback():
+            return self.headers.get("X-Handle-Device", "")
+        q = parse_qs(urlparse(self.path).query).get("device", [""])[0]
+        return (data or {}).get("device") or q or ""
+
+    def _gate(self, write: bool) -> bool:
+        path = urlparse(self.path).path
+        if not self._is_loopback():
+            name = self.headers.get("X-Handle-Device", "")
+            if (path in devices.REMOTE_PATHS
+                    and devices.valid_name(name)
+                    and devices.token_ok(self.headers.get("X-Handle-Token"))):
+                return True
+            self._send(403, "forbidden", "text/plain; charset=utf-8")
+            return False
+        host = (self.headers.get("Host") or "").split(":")[0].strip("[]")
+        if host and host not in ("127.0.0.1", "localhost", "::1", *devices.listen_addrs()):
+            self._send(403, "bad host", "text/plain; charset=utf-8")
+            return False
+        origin = self.headers.get("Origin")
+        if write and origin:
+            o = urlparse(origin)
+            local = o.scheme in ("http", "https") and o.hostname in ("127.0.0.1", "localhost")
+            if not (origin.startswith("chrome-extension://") or local):
+                self._send(403, "cross-origin write refused", "text/plain; charset=utf-8")
+                return False
+        return True
+
     def do_GET(self):
+        if not self._gate(write=False):
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/":
             error = parse_qs(parsed.query).get("error", [None])[0]
@@ -1181,14 +1228,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(payload, indent=2),
                        "application/json; charset=utf-8")
         elif parsed.path == "/ext/status":
-            self._send(200, json.dumps(extbridge.status()), "application/json")
+            self._send(200, json.dumps(extbridge.status(self._device())), "application/json")
+        elif parsed.path == "/ext/hello":
+            # a linked device's options page checks it can reach us and is paired
+            self._send(200, json.dumps({"ok": True, "device": self._device(),
+                                        "server": "handle"}), "application/json")
+        elif parsed.path == "/api/devices":
+            st = {d["device"]: d for d in extbridge.devices()}
+            for f in devices.APP_DIR.glob("state.*.json"):
+                name = f.name[len("state."):-len(".json")]
+                st.setdefault(name, extbridge.status(name))
+            self._send(200, json.dumps({
+                "listen": devices.listen_addrs(), "port": PORT,
+                "paired": bool(devices.load().get("token")),
+                "devices": list(st.values())}), "application/json")
         elif parsed.path == "/api/record/status":
             self._send(200, json.dumps(recorder.status()), "application/json")
         elif parsed.path == "/api/record/list":
             self._send(200, json.dumps(recorder.listing()), "application/json")
         elif parsed.path == "/ext/poll":
             # extension long-polls here for the next live command
-            cmd = extbridge.poll(wait=25.0)
+            cmd = extbridge.poll(wait=25.0, device=self._device())
             self._send(200, json.dumps(cmd or {}), "application/json")
         elif parsed.path == "/ext/policy":
             # passive capture rules — the extension applies these BEFORE it
@@ -1200,6 +1260,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "not found", "text/plain; charset=utf-8")
 
     def do_POST(self):
+        if not self._gate(write=True):
+            return
         parsed = urlparse(self.path)
 
         if parsed.path == "/api/refresh":
@@ -1222,23 +1284,29 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/ext/sync":
             # extension pushed the current tabs/groups → refresh state.json
             ext_tabs = data.get("tabs", [])
+            dev = self._device(data)
+            if dev and not devices.valid_name(dev):
+                self._send(400, "bad device name", "text/plain; charset=utf-8")
+                return
             try:
-                collector.collect_from_ext(ext_tabs)
+                collector.collect_from_ext(ext_tabs, device=dev)
             except Exception:
                 pass
             extbridge.mark_sync({"tab_count": len(ext_tabs),
-                                 "ext_version": data.get("version", "")})
+                                 "ext_version": data.get("version", "")}, device=dev)
             self._ok()
             return
         if parsed.path == "/ext/result":
-            extbridge.deliver_result(data.get("id", ""), data.get("result", {}))
+            extbridge.deliver_result(data.get("id", ""), data.get("result", {}),
+                                     device=self._device(data))
             self._ok()
             return
         if parsed.path == "/ext/cmd":
             # the CLI asks the extension to do something live
             result = extbridge.enqueue(
                 data.get("method", ""), data.get("params", {}),
-                timeout=float(data.get("timeout", 20)))
+                timeout=float(data.get("timeout", 20)),
+                device=self._device(data))
             self._send(200, json.dumps(result), "application/json")
             return
         if parsed.path == "/ext/record":
@@ -1428,6 +1496,24 @@ class Handler(BaseHTTPRequestHandler):
         self._ok()
 
 
+def _serve_linked(addr: str) -> None:
+    """Listen on a paired address (the tailnet IP) for linked devices' extensions.
+
+    Tailscale can come up after Handle does (login, sleep/wake), so a failed bind
+    retries every minute instead of giving up for the life of the process.
+    """
+    while True:
+        try:
+            srv = ThreadingHTTPServer((addr, PORT), Handler)
+            print(f"Handle  →  linked devices on http://{addr}:{PORT}")
+            srv.serve_forever()
+        except OSError as exc:
+            print(f"Handle  →  cannot listen on {addr}:{PORT} yet ({exc}); retrying in 60s")
+            time.sleep(60)
+
+
 if __name__ == "__main__":
+    for addr in devices.listen_addrs():
+        threading.Thread(target=_serve_linked, args=(addr,), daemon=True).start()
     print(f"Handle  →  http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

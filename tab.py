@@ -52,6 +52,7 @@ import json
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,9 +76,18 @@ HANDLE_URL = os.environ.get("HANDLE_URL", "http://127.0.0.1:4910")
 # are connected): permission-free reads, native groups, race-free screenshots.
 # Everything degrades to AppleScript when the bridge isn't there.
 # --------------------------------------------------------------------------- #
+# "" = this Mac's Chrome. Set by `--device <name>` (or HANDLE_DEVICE) to read and act
+# on a linked device's Chrome, whose extension syncs here over the tailnet.
+DEVICE = ""
+
+
+def _dev_q() -> str:
+    return ("?device=" + urllib.parse.quote(DEVICE)) if DEVICE else ""
+
+
 def _ext_status() -> dict:
     try:
-        with urllib.request.urlopen(HANDLE_URL + "/ext/status", timeout=1) as r:
+        with urllib.request.urlopen(HANDLE_URL + "/ext/status" + _dev_q(), timeout=1) as r:
             return json.loads(r.read())
     except Exception:
         return {"connected": False}
@@ -88,7 +98,8 @@ def _ext_alive() -> bool:
 
 
 def _ext_cmd(method: str, params: dict | None = None, timeout: int = 35) -> dict:
-    body = json.dumps({"method": method, "params": params or {}, "timeout": timeout}).encode()
+    body = json.dumps({"method": method, "params": params or {}, "timeout": timeout,
+                       "device": DEVICE}).encode()
     try:
         req = urllib.request.Request(
             HANDLE_URL + "/ext/cmd", data=body,
@@ -222,7 +233,7 @@ def load_tabs(refresh: bool = False) -> list[dict]:
         # Papercut (2026-08-19, handle): that AppleScript scan runs to a 180s timeout,
         # well past the MCP wrapper's 60s budget, so any refresh path through load_tabs
         # died as an opaque `spawnSync python3 ETIMEDOUT` instead of returning tabs.
-        if not _ext_alive():
+        if not _ext_alive() and not DEVICE:
             collect.collect()
     state = collect.load_json(STATE_PATH, {})
     _backfill_ids(state)
@@ -1371,7 +1382,13 @@ def cmd_open(args) -> None:
         if _ext_alive():
             res = _ext_cmd("tab_open", {"url": ref}, timeout=8)
             if "error" not in res:
-                print(f"Opened  {ref}")
+                tab = _await_handle(res.get("tab_id"), ref)
+                if getattr(args, "json", False):
+                    print(json.dumps(tab or {"url": ref, "id": None}, indent=2, ensure_ascii=False))
+                elif tab:
+                    print(f"Opened  {tab['id']}  {tab['url']}")
+                else:
+                    print(f"Opened  {ref}  (handle not assigned yet; `tab active` in a moment)")
                 return
         n = collect.open_urls([ref])
         print(f"{'Opened' if n else 'Could not open'}  {ref}")
@@ -1385,6 +1402,34 @@ def cmd_open(args) -> None:
             return
     ok = collect.focus_tab(tab["url"])
     print(f"{'Focused' if ok else 'Could not focus'} {tab['id']}  {tab['title']}")
+
+
+def _await_handle(ext_tab_id, url: str = "", wait: float = 8.0) -> dict | None:
+    """The handle of a tab the extension just opened.
+
+    Papercuts 2026-11-02..05 (handle): open_tab said "Opened" and the next read_tab
+    on `active` or the new handle missed, because the tab only lands in state.json
+    once the extension's next sync arrives. Wait for that sync (keyed by Chrome's
+    tab id, which survives the redirects a login page does) and hand back the handle.
+    """
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        for t in load_tabs():
+            if ext_tab_id is not None and t.get("ext_tab_id") == ext_tab_id:
+                return t
+        time.sleep(0.3)
+    return None
+
+
+def _drop_from_state(url: str) -> None:
+    """Remove a closed tab now, so `tab list` right after a close is accurate.
+
+    Papercut 2026-11-02 (handle): closed tabs stayed listed until the next sync.
+    """
+    state = collect.load_json(STATE_PATH, {})
+    if url in (state.get("tabs") or {}):
+        del state["tabs"][url]
+        collect.write_json(STATE_PATH, state)
 
 
 # ---- act on a tab: run JS, click, type (via the extension's MAIN-world eval) ----
@@ -1599,7 +1644,8 @@ def cmd_click(args) -> None:
 
 def cmd_type(args) -> None:
     tab = resolve_one(args.ref, load_tabs())
-    params = {"sel": args.selector, "text": args.text, "submit": bool(args.submit)}
+    params = {"sel": args.selector, "text": args.text, "submit": bool(args.submit),
+              "nth": int(getattr(args, "nth", 0) or 0)}
     label = args.selector or ""
     verdict = _guard_or_exit("type", tab, params, label, getattr(args, "confirm", False))
     ok, val = _ext_act(tab, "type", params)
@@ -2237,6 +2283,8 @@ def cmd_close(args) -> None:
         if tab.get("ext_tab_id") is not None and _ext_alive():
             ok = "error" not in _ext_cmd("tab_close", {"tab_ids": [tab["ext_tab_id"]]}, timeout=8)
         ok = ok or collect.close_tab(tab["url"])
+        if ok:
+            _drop_from_state(tab["url"])
         print(f"{'Closed' if ok else 'Could not close'} {tab['id']}  {tab['title']}")
 
 
@@ -2395,9 +2443,15 @@ def cmd_ext(args) -> None:
     """Status of the Handle Chrome-extension bridge."""
     st = _ext_status()
     if st.get("connected"):
-        print(f"Handle extension connected  ·  {st.get('tab_count', '?')} tabs synced "
-              f"{st.get('last_sync_ago', '?')}s ago  ·  ext v{st.get('ext_version', '?')}\n"
-              "Reads/scan/screenshots prefer the extension (permission-free, race-free, native groups).")
+        rt = _ext_ping()
+        where = f" on {DEVICE}" if DEVICE else ""
+        print(f"Handle extension{where} connected  ·  {st.get('tab_count', '?')} tabs synced "
+              f"{st.get('last_sync_ago', '?')}s ago  ·  ext v{st.get('ext_version', '?')}")
+        if rt is None:
+            print("  ✗ but it did not answer a ping in 5s: commands will time out.\n"
+                  "    Fix: `tab doctor`, or reload Handle at chrome://extensions.")
+            sys.exit(1)
+        print(f"  ✓ answered a ping in {rt} ms")
     else:
         print(
             "Handle extension NOT connected.\n\n"
@@ -2411,6 +2465,19 @@ def cmd_ext(args) -> None:
             f"     select {APP_DIR / 'extension'}\n"
             "  3. `tab ext` again to confirm.\n\n"
             "Until then everything falls back to AppleScript — nothing breaks.")
+
+
+def _ext_ping(timeout: int = 5) -> int | None:
+    """Round-trip ms for a no-op command, or None. A recent heartbeat is not proof the
+    extension will run a command: papercut 2026-11-04 (handle), `tab ext` said
+    connected while every eval timed out."""
+    for attempt in range(2):  # one retry: right after a reload the loop takes a few seconds
+        t0 = time.time()
+        res = _ext_cmd("ping", timeout=timeout)
+        if isinstance(res, dict) and res.get("pong"):
+            return int((time.time() - t0) * 1000)
+        time.sleep(2)
+    return None
 
 
 def _server_alive() -> bool:
@@ -2460,9 +2527,15 @@ def cmd_doctor(args) -> None:
 
     # 2. the extension — preferred backend; AppleScript covers for it if absent.
     st = _ext_status()
-    if st.get("connected"):
+    rt = _ext_ping() if st.get("connected") else None
+    if st.get("connected") and rt is None:
+        ok = False
+        print("  extension   ✗ heartbeat but no answer to a ping: commands will time out")
+        print("                fix: chrome://extensions → reload “Handle”")
+    elif st.get("connected"):
         print(f"  extension   ✓ connected  ·  v{st.get('ext_version','?')}  ·  "
-              f"{st.get('tab_count','?')} tabs  ·  synced {st.get('last_sync_ago','?')}s ago")
+              f"{st.get('tab_count','?')} tabs  ·  synced {st.get('last_sync_ago','?')}s ago  ·  "
+              f"ping {rt} ms")
     else:
         print("  extension   ⚠ not connected — reads use AppleScript (still works, "
               "just slower / needs the tab frontmost)")
@@ -2869,9 +2942,85 @@ def cmd_mode(args) -> None:
         print(exc); sys.exit(1)
 
 
+def cmd_devices(args) -> None:
+    """Linked devices: other computers whose Handle extension syncs to this Mac."""
+    import devices as dev_lib
+    action = args.action
+    if action == "pair":
+        try:
+            cfg = dev_lib.pair(args.listen or "")
+        except RuntimeError as exc:
+            print("✗ " + str(exc))
+            sys.exit(1)
+        _restart_server()
+        addr = cfg["listen"][0]
+        port = urllib.parse.urlparse(HANDLE_URL).port or 4910
+        print("Paired. On the other computer:\n"
+              "  1. Install Tailscale and sign in with the same account.\n"
+              "  2. Chrome → chrome://extensions → Developer mode → Load unpacked → the\n"
+              "     extension/ folder from github.com/abhitsian/handle.\n"
+              "  3. Open the extension's Options and enter:\n"
+              f"       Server   http://{addr}:{port}\n"
+              f"       Token    {cfg['token']}\n"
+              "       Device   a short name, e.g. work\n"
+              "  4. Back here: `tab devices` should list it within 30s, then\n"
+              "     `tab --device work list`.")
+        return
+    if action == "unpair":
+        dev_lib.unpair()
+        _restart_server()
+        print("Unpaired: the server listens on 127.0.0.1 only and linked devices are refused.")
+        return
+    if action == "forget":
+        if not args.name or not dev_lib.valid_name(args.name):
+            print("Usage: tab devices forget <name>")
+            sys.exit(1)
+        f = APP_DIR / f"state.{args.name}.json"
+        if f.exists():
+            f.unlink()
+        print(f"Forgot {args.name} (its tab list). It reappears if its extension syncs again.")
+        return
+    try:
+        with urllib.request.urlopen(HANDLE_URL + "/api/devices", timeout=3) as r:
+            info = json.loads(r.read())
+    except Exception as exc:
+        print(f"Server not answering ({exc}). Run `tab doctor`.")
+        sys.exit(1)
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return
+    print(("Listening for linked devices on " + ", ".join(info["listen"])) if info.get("listen")
+          else "Not paired: linked devices are refused. `tab devices pair` to allow them.")
+    for d in info.get("devices", []):
+        name = d.get("device") or "this-mac"
+        state = "connected" if d.get("connected") else (
+            f"last seen {d['last_sync_ago']}s ago" if d.get("last_sync_ago") else "offline")
+        print(f"  {name:<14} {state:<22} {d.get('tab_count', '?')} tabs  ext v{d.get('ext_version', '?')}")
+
+
+def _restart_server() -> None:
+    import subprocess
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.abhishek.handle"],
+                   capture_output=True)
+    for _ in range(24):
+        if _server_alive():
+            return
+        time.sleep(0.25)
+
+
+# Commands that work on a linked device: everything that goes through the tab
+# list or the extension. History, bookmarks, clipboard, CDP, modes and Pointer
+# read this Mac's disk or screen, so they stay local.
+_DEVICE_OK = {"list", "find", "grep", "read", "shot", "show", "active", "open", "close",
+              "eval", "click", "type", "scroll", "harvest", "watch", "console", "ext",
+              "note", "group", "pin", "unpin", "refresh", "devices", "ask", "save"}
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tab", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.epilog = ((p.epilog or "") + "\n\nAny command that goes through the tab list or the extension takes "
+                "--device <name> to run on a linked device's Chrome (see `tab devices`).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sl = sub.add_parser("list", help="list every open tab")
@@ -3092,6 +3241,7 @@ def build_parser() -> argparse.ArgumentParser:
     sty.add_argument("selector", help="CSS selector of the input/textarea, or \"\" to heuristically find a message/Copilot composer")
     sty.add_argument("text", help="text to set")
     sty.add_argument("--submit", action="store_true", help="press Enter after typing (send the message)")
+    sty.add_argument("--nth", type=int, default=0, help="which match of the selector, 0-based (default 0)")
     sty.add_argument("--confirm", action="store_true", help="execute even if it looks irreversible (e.g. --submit on a Send/Pay form)")
     sty.set_defaults(func=cmd_type)
 
@@ -3147,9 +3297,17 @@ def build_parser() -> argparse.ArgumentParser:
     scr.add_argument("--json", action="store_true")
     scr.set_defaults(func=cmd_crawl)
 
-    so = sub.add_parser("open", help="bring a tab to the front")
+    so = sub.add_parser("open", help="bring a tab to the front, or open a URL and print its new handle")
     so.add_argument("ref")
+    so.add_argument("--json", action="store_true")
     so.set_defaults(func=cmd_open)
+
+    sdev = sub.add_parser("devices", help="linked devices: other computers' Chrome, reachable with --device <name>")
+    sdev.add_argument("action", nargs="?", default="list", choices=["list", "pair", "unpair", "forget"])
+    sdev.add_argument("name", nargs="?", default="")
+    sdev.add_argument("--listen", default="", help="address to listen on (default: this Mac's Tailscale IP)")
+    sdev.add_argument("--json", action="store_true")
+    sdev.set_defaults(func=cmd_devices)
 
     sc = sub.add_parser("close", help="close tab(s) in Chrome")
     sc.add_argument("refs", nargs="+")
@@ -3274,14 +3432,52 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _take_device(argv: list[str]) -> tuple[list[str], str]:
+    """Pull `--device NAME` / `-D NAME` / `--device=NAME` out from anywhere in argv,
+    so it works before or after the subcommand."""
+    out, dev, i = [], os.environ.get("HANDLE_DEVICE", ""), 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--device", "-D") and i + 1 < len(argv):
+            dev = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith("--device="):
+            dev = a.split("=", 1)[1]
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    return out, dev.strip()
+
+
 def main(argv=None) -> None:
+    global DEVICE, STATE_PATH
+    argv, dev = _take_device(list(sys.argv[1:] if argv is None else argv))
+    if dev in ("this-mac", "local"):
+        dev = ""
+    if dev:
+        import devices as dev_lib
+        if not dev_lib.valid_name(dev):
+            print(f"Bad device name {dev!r}: lowercase letters, digits and dashes.")
+            sys.exit(2)
+        DEVICE = dev
+        collect.set_device(dev)
+        STATE_PATH = collect.STATE_PATH
     args = build_parser().parse_args(argv)
+    if DEVICE and args.cmd not in _DEVICE_OK:
+        print(f"`tab {args.cmd}` reads this Mac only (disk, clipboard or screen); "
+              f"it can't run on device {DEVICE!r}.")
+        sys.exit(2)
     # Any command that resolves a dead handle exits with the stale-index message rather
     # than a traceback — and, critically, never with a silently wrong tab.
     try:
         args.func(args)
     except StaleHandle as exc:
         print(exc.message())
+        sys.exit(1)
+    except collect.LocalOnly as exc:
+        print("✗ " + str(exc) + " Check `tab --device " + DEVICE + " ext`.")
         sys.exit(1)
 
 
